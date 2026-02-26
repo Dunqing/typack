@@ -1,0 +1,25 @@
+import type { Formatter } from 'tinyrainbow';
+import type { MatcherHintOptions, Tester } from './types';
+import { diff, printDiffOrStringify } from '@vitest/utils/diff';
+import { stringify } from '@vitest/utils/display';
+export { diff } from '@vitest/utils/diff';
+export { stringify };
+declare function matcherHint(matcherName: string, received?: string, expected?: string, options?: MatcherHintOptions): string;
+declare function printReceived(object: unknown): string;
+declare function printExpected(value: unknown): string;
+export declare function getMatcherUtils(): {
+    EXPECTED_COLOR: Formatter;
+    RECEIVED_COLOR: Formatter;
+    INVERTED_COLOR: Formatter;
+    BOLD_WEIGHT: Formatter;
+    DIM_COLOR: Formatter;
+    diff: typeof diff;
+    matcherHint: typeof matcherHint;
+    printReceived: typeof printReceived;
+    printExpected: typeof printExpected;
+    printDiffOrStringify: typeof printDiffOrStringify;
+    printWithType: typeof printWithType;
+};
+export declare function printWithType<T>(name: string, value: T, print: (value: T) => string): string;
+export declare function addCustomEqualityTesters(newTesters: Array<Tester>): void;
+export declare function getCustomEqualityTesters(): Array<Tester>;

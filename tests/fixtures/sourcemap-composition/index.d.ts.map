@@ -1,0 +1,1 @@
+{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["index.ts"],"sourcesContent":["import { foo } from \"./mod\";\nexport interface Foo {\n  bar: typeof foo;\n}\n"],"mappings":"AAAA;AACA;AACA;AACA"}

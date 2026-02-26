@@ -1,0 +1,22 @@
+# Rust build artifacts
+target/
+napi/target/
+**/*.rs.bk
+
+# Node modules
+node_modules/
+
+# Coverage / profiling artifacts
+*.profraw
+*.profdata
+
+# Logs
+*.log
+
+# Editor directories
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

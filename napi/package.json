@@ -1,0 +1,53 @@
+{
+  "name": "typack",
+  "version": "0.1.0",
+  "description": "A native TypeScript declaration (.d.ts) bundler built on Oxc",
+  "keywords": [
+    "bundler",
+    "declaration",
+    "dts",
+    "oxc",
+    "typescript"
+  ],
+  "homepage": "https://github.com/Dunqing/typack",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Dunqing/typack",
+    "directory": "napi"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node"
+  ],
+  "type": "commonjs",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "build": "pnpm run build-napi-release",
+    "build-napi": "napi build --platform --js index.js --dts index.d.ts --output-dir . --no-dts-cache",
+    "build-napi-release": "pnpm run build-napi --release",
+    "smoke": "node -e \"const m=require('./index.js'); if(typeof m.bundle!=='function'){throw new Error('bundle is missing')}\""
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.2.0"
+  },
+  "napi": {
+    "binaryName": "typack",
+    "packageName": "@typack/typack",
+    "targets": [
+      "aarch64-apple-darwin",
+      "aarch64-pc-windows-msvc",
+      "aarch64-unknown-linux-gnu",
+      "aarch64-unknown-linux-musl",
+      "x86_64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl"
+    ]
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

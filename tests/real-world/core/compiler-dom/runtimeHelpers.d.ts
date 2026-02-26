@@ -1,0 +1,10 @@
+export declare const V_MODEL_RADIO: unique symbol;
+export declare const V_MODEL_CHECKBOX: unique symbol;
+export declare const V_MODEL_TEXT: unique symbol;
+export declare const V_MODEL_SELECT: unique symbol;
+export declare const V_MODEL_DYNAMIC: unique symbol;
+export declare const V_ON_WITH_MODIFIERS: unique symbol;
+export declare const V_ON_WITH_KEYS: unique symbol;
+export declare const V_SHOW: unique symbol;
+export declare const TRANSITION: unique symbol;
+export declare const TRANSITION_GROUP: unique symbol;

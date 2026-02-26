@@ -1,0 +1,11 @@
+import type { Classes, Constructable, Methods, Mock, MockInstanceOption, Procedure, Properties } from './spy/types';
+export declare function isMockFunction(fn: any): fn is Mock;
+export declare function createMockInstance(options?: MockInstanceOption): Mock<Procedure | Constructable>;
+export declare function fn<T extends Procedure | Constructable = Procedure>(originalImplementation?: T): Mock<T>;
+export declare function spyOn<T extends object, S extends Properties<Required<T>>>(object: T, key: S, accessor: 'get'): Mock<() => T[S]>;
+export declare function spyOn<T extends object, G extends Properties<Required<T>>>(object: T, key: G, accessor: 'set'): Mock<(arg: T[G]) => void>;
+export declare function spyOn<T extends object, M extends Classes<Required<T>> | Methods<Required<T>>>(object: T, key: M): Required<T>[M] extends Constructable | Procedure ? Mock<Required<T>[M]> : never;
+export declare function restoreAllMocks(): void;
+export declare function clearAllMocks(): void;
+export declare function resetAllMocks(): void;
+export type { Constructable, MaybeMocked, MaybeMockedConstructor, MaybeMockedDeep, MaybePartiallyMocked, MaybePartiallyMockedDeep, Mock, MockContext, Mocked, MockedClass, MockedFunction, MockedFunctionDeep, MockedObject, MockedObjectDeep, MockInstance, MockInstanceOption, MockParameters, MockProcedureContext, MockResult, MockResultIncomplete, MockResultReturn, MockResultThrow, MockReturnType, MockSettledResult, MockSettledResultFulfilled, MockSettledResultIncomplete, MockSettledResultRejected, PartiallyMockedFunction, PartiallyMockedFunctionDeep, PartialMock, Procedure, } from './spy/types';

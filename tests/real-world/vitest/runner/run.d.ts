@@ -1,0 +1,12 @@
+import type { Awaitable } from '@vitest/utils';
+import type { FileSpecification, VitestRunner } from './types/runner';
+import type { File, Suite, SuiteHooks, Task, TaskUpdateEvent, Test } from './types/tasks';
+export declare function callSuiteHook<T extends keyof SuiteHooks>(suite: Suite, currentTask: Task, name: T, runner: VitestRunner, args: SuiteHooks[T][0] extends (...args: infer A) => Awaitable<any> ? A : never): Promise<unknown[]>;
+export declare function finishSendTasksUpdate(runner: VitestRunner): Promise<void>;
+export declare function updateTask(event: TaskUpdateEvent, task: Task, runner: VitestRunner): void;
+export declare function runTest(test: Test, runner: VitestRunner): Promise<void>;
+export declare function runSuite(suite: Suite, runner: VitestRunner): Promise<void>;
+export declare function runFiles(files: File[], runner: VitestRunner): Promise<void>;
+export declare function startTests(specs: string[] | FileSpecification[], runner: VitestRunner): Promise<File[]>;
+declare function publicCollect(specs: string[] | FileSpecification[], runner: VitestRunner): Promise<File[]>;
+export { publicCollect as collectTests };

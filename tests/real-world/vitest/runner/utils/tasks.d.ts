@@ -1,0 +1,12 @@
+import type { Arrayable } from '@vitest/utils';
+import type { Suite, Task, Test } from '../types/tasks';
+export declare function isTestCase(s: Task): s is Test;
+export declare function getTests(suite: Arrayable<Task>): Test[];
+export declare function getTasks(tasks?: Arrayable<Task>): Task[];
+export declare function getSuites(suite: Arrayable<Task>): Suite[];
+export declare function hasTests(suite: Arrayable<Suite>): boolean;
+export declare function hasFailed(suite: Arrayable<Task>): boolean;
+export declare function getNames(task: Task): string[];
+export declare function getFullName(task: Task, separator?: string): string;
+export declare function getTestName(task: Task, separator?: string): string;
+export declare function createTaskName(names: readonly (string | undefined)[], separator?: string): string;

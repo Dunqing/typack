@@ -1,0 +1,1 @@
+{"version":3,"file":"mod.d.ts","sourceRoot":"","sources":["mod.ts"],"sourcesContent":["export const foo: number = 42;\n"],"mappings":"AAAA,eAAe"}

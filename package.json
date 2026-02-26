@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "scripts": {
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "prepare": "husky",
+    "release": "bumpp --tag 'napi-v%s' --commit 'release: napi v%s' napi/package.json"
+  },
+  "devDependencies": {
+    "bumpp": "^10.4.1",
+    "husky": "^9.1.7",
+    "oxfmt": "latest"
+  }
+}

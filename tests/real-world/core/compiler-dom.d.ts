@@ -1,0 +1,11 @@
+import { type CodegenResult, type CompilerOptions, type DirectiveTransform, type NodeTransform, type ParserOptions, type RootNode } from '@vue/compiler-core';
+import { parserOptions } from './compiler-dom/parserOptions';
+export { parserOptions };
+export declare const DOMNodeTransforms: NodeTransform[];
+export declare const DOMDirectiveTransforms: Record<string, DirectiveTransform>;
+export declare function compile(src: string | RootNode, options?: CompilerOptions): CodegenResult;
+export declare function parse(template: string, options?: ParserOptions): RootNode;
+export * from './compiler-dom/runtimeHelpers';
+export { transformStyle } from './compiler-dom/transforms/transformStyle';
+export { createDOMCompilerError, DOMErrorCodes, DOMErrorMessages, } from './compiler-dom/errors';
+export * from '@vue/compiler-core';

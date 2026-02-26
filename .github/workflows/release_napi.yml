@@ -1,0 +1,124 @@
+name: Release NAPI
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "napi-v*"
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            build: pnpm run --filter typack build-napi-release --target x86_64-unknown-linux-gnu --use-napi-cross
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            build: pnpm run --filter typack build-napi-release --target aarch64-unknown-linux-gnu --use-napi-cross
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            build: pnpm run --filter typack build-napi-release --target x86_64-unknown-linux-musl -x
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            build: pnpm run --filter typack build-napi-release --target x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            build: pnpm run --filter typack build-napi-release --target aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            build: pnpm run --filter typack build-napi-release --target x86_64-pc-windows-msvc
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            build: pnpm run --filter typack build-napi-release --target aarch64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Setup Zig
+        if: ${{ contains(matrix.target, 'musl') }}
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build binding
+        working-directory: napi
+        run: ${{ matrix.build }}
+
+      - name: Upload NAPI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          name: typack-native-${{ matrix.target }}
+          path: napi/*.node
+
+  publish:
+    name: Publish NAPI Packages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PACKAGE_PATH: napi/package.json
+      NPM_DIR: napi/npm-release
+      PUBLISH_FLAGS: "--provenance --access public --no-git-checks"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: napi/artifacts
+          pattern: typack-native-*
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Create npm package dirs
+        working-directory: napi
+        run: pnpm exec napi create-npm-dirs --package-json-path package.json --npm-dir npm-release
+
+      - name: Copy artifacts into npm package dirs
+        working-directory: napi
+        run: pnpm exec napi artifacts --package-json-path package.json --build-output-dir . --npm-dir npm-release
+
+      - name: Publish platform packages
+        working-directory: napi
+        run: pnpm exec napi pre-publish --no-gh-release -t npm --package-json-path package.json --npm-dir npm-release
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Upgrade npm
+        run: npm install -g npm@latest
+
+      - name: Publish main package
+        working-directory: napi
+        run: pnpm publish . ${PUBLISH_FLAGS}
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

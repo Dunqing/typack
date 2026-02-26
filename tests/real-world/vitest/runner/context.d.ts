@@ -1,0 +1,11 @@
+import type { Awaitable } from '@vitest/utils';
+import type { VitestRunner } from './types/runner';
+import type { RuntimeContext, SuiteCollector, Test, TestContext } from './types/tasks';
+export declare const collectorContext: RuntimeContext;
+export declare function collectTask(task: SuiteCollector): void;
+export declare function runWithSuite(suite: SuiteCollector, fn: () => Awaitable<void>): Promise<void>;
+export declare function withTimeout<T extends (...args: any[]) => any>(fn: T, timeout: number, isHook?: boolean, stackTraceError?: Error, onTimeout?: (args: T extends (...args: infer A) => any ? A : never, error: Error) => void): T;
+export declare function withCancel<T extends (...args: any[]) => any>(fn: T, signal: AbortSignal): T;
+export declare function abortIfTimeout([context]: [TestContext?], error: Error): void;
+export declare function abortContextSignal(context: TestContext, error: Error): void;
+export declare function createTestContext(test: Test, runner: VitestRunner): TestContext;

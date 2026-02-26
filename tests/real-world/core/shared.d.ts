@@ -1,0 +1,15 @@
+export { makeMap } from './shared/makeMap';
+export * from './shared/general';
+export * from './shared/patchFlags';
+export * from './shared/shapeFlags';
+export * from './shared/slotFlags';
+export * from './shared/globalsAllowList';
+export * from './shared/codeframe';
+export * from './shared/normalizeProp';
+export * from './shared/domTagConfig';
+export * from './shared/domAttrConfig';
+export * from './shared/escapeHtml';
+export * from './shared/looseEqual';
+export * from './shared/toDisplayString';
+export * from './shared/typeUtils';
+export * from './shared/cssVars';

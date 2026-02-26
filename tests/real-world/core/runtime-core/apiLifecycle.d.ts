@@ -1,0 +1,21 @@
+import { type ComponentInternalInstance } from './component';
+import type { ComponentPublicInstance } from './componentPublicInstance';
+import { type DebuggerEvent } from '@vue/reactivity';
+import { LifecycleHooks } from './enums';
+export { onActivated, onDeactivated } from './components/KeepAlive';
+export declare function injectHook(type: LifecycleHooks, hook: Function & {
+    __weh?: Function;
+}, target?: ComponentInternalInstance | null, prepend?: boolean): Function | undefined;
+type CreateHook<T = any> = (hook: T, target?: ComponentInternalInstance | null) => void;
+export declare const onBeforeMount: CreateHook;
+export declare const onMounted: CreateHook;
+export declare const onBeforeUpdate: CreateHook;
+export declare const onUpdated: CreateHook;
+export declare const onBeforeUnmount: CreateHook;
+export declare const onUnmounted: CreateHook;
+export declare const onServerPrefetch: CreateHook;
+export type DebuggerHook = (e: DebuggerEvent) => void;
+export declare const onRenderTriggered: CreateHook<DebuggerHook>;
+export declare const onRenderTracked: CreateHook<DebuggerHook>;
+export type ErrorCapturedHook<TError = unknown> = (err: TError, instance: ComponentPublicInstance | null, info: string) => boolean | void;
+export declare function onErrorCaptured<TError = Error>(hook: ErrorCapturedHook<TError>, target?: ComponentInternalInstance | null): void;
