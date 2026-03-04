@@ -23,7 +23,7 @@
     "index.js",
     "index.d.ts",
     "cli.js",
-    "*.node"
+    "README.md"
   ],
   "type": "commonjs",
   "main": "index.js",
