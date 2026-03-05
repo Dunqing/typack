@@ -230,20 +230,19 @@ impl<'a> GenerateStage<'a> {
     ) -> Option<ModuleOutput> {
         let ns_wrap = shared.namespace_wraps.get(&module_idx);
         let module_has_augmentation = self.scan_result.modules[module_idx].has_augmentation;
+        let force_whole_module = is_entry
+            || module_has_augmentation
+            || shared.implicit_whole_fallbacks.contains(&module_idx);
 
         let (module_is_needed, module_needed): (
             bool,
             Option<FxHashMap<SymbolId, NeededKindFlags>>,
-        ) = if is_entry {
+        ) = if force_whole_module {
             (true, None)
         } else {
             match shared.needed_symbol_kinds.get(&module_idx) {
                 Some(entry) => (true, entry.clone()),
-                None => (
-                    module_has_augmentation
-                        || shared.implicit_whole_fallbacks.contains(&module_idx),
-                    None,
-                ),
+                None => (false, None),
             }
         };
 
