@@ -36,7 +36,22 @@ onMounted(async () => {
   monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
     noSemanticValidation: true,
   });
-  monaco.languages.typescript.typescriptDefaults.setEagerModelSync(false);
+  // Disable TS worker features (hover, completions, etc.) to prevent
+  // "Could not find source file: inmemory://model" errors.
+  // Syntax highlighting still works via Monaco's monarch tokenizer.
+  monaco.languages.typescript.typescriptDefaults.setModeConfiguration({
+    completionItems: false,
+    hovers: false,
+    definitions: false,
+    references: false,
+    documentHighlights: false,
+    rename: false,
+    diagnostics: false,
+    codeActions: false,
+    inlayHints: false,
+    signatureHelp: false,
+    documentSymbols: false,
+  });
 
   // Make import paths clickable — clicking navigates to the target file
   monaco.languages.registerLinkProvider("typescript", {
