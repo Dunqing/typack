@@ -10,12 +10,6 @@ interface Diagnostic {
   severity: string;
 }
 
-export interface BundleOptions {
-  sourcemap: boolean;
-  cjsDefault: boolean;
-  external: string[];
-}
-
 interface TypackModule {
   bundle: (options: {
     input: string[];
@@ -96,7 +90,7 @@ export function useTypack() {
 
   init();
 
-  function bundle(files: Record<string, string>, options: BundleOptions) {
+  function bundle(files: Record<string, string>) {
     if (!typackModule || !vol) return;
 
     loading.value = true;
@@ -115,9 +109,7 @@ export function useTypack() {
       const result = typackModule.bundle({
         input: ["/src/index.d.ts"],
         cwd: "/src",
-        sourcemap: options.sourcemap,
-        cjsDefault: options.cjsDefault,
-        external: options.external.length > 0 ? options.external : undefined,
+        sourcemap: true,
       });
 
       output.value = { code: result.code, map: result.map ?? null };
