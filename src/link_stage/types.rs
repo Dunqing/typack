@@ -77,9 +77,9 @@ impl NeededKindFlags {
 /// Names not in this plan are filtered out during generate to minimize output size.
 #[derive(Default)]
 pub struct NeededNamesPlan {
-    /// Per-module needed names. `None` means all names are needed (e.g. entry module),
-    /// `Some(set)` restricts to the given set, `Some(empty)` means nothing is needed.
-    pub map: FxHashMap<ModuleIdx, Option<FxHashSet<String>>>,
+    /// Per-module needed symbols. `None` means all declarations are needed (e.g. entry module),
+    /// `Some(set)` restricts to the given root-scope symbols, `Some(empty)` means nothing is needed.
+    pub map: FxHashMap<ModuleIdx, Option<FxHashSet<SymbolId>>>,
     /// Per-module needed declaration spaces keyed by root symbol.
     /// `None` means all declarations are needed.
     pub symbol_kinds: FxHashMap<ModuleIdx, Option<FxHashMap<SymbolId, NeededKindFlags>>>,
@@ -96,6 +96,17 @@ impl NeededNamesPlan {
         name: &str,
     ) -> Option<&FxHashSet<NeededReason>> {
         self.reasons.get(&(module_idx, name.to_string()))
+    }
+
+    /// Check whether a specific symbol is needed for a module.
+    #[cfg(test)]
+    pub fn contains_symbol(&self, module: &Module<'_>, name: &str) -> bool {
+        let Some(entry) = self.map.get(&module.idx) else { return false };
+        let Some(set) = entry else { return true }; // None = all needed
+        let Some(symbol_id) = module.scoping.get_root_binding(oxc_span::Ident::from(name)) else {
+            return false;
+        };
+        set.contains(&symbol_id)
     }
 }
 

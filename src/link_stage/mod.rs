@@ -307,10 +307,9 @@ mod tests {
         let plan = build_needed_names(entry, &scan_result);
         let mod_idx = entry.resolve_internal_specifier("./mod").expect("mod should resolve");
 
-        let needed = plan.map.get(&mod_idx).expect("mod should be tracked");
-        let needed = needed.as_ref().expect("mod should stay partially needed");
-        assert!(needed.contains("Shared"));
-        assert!(!needed.contains("shared"));
+        let mod_module = &scan_result.modules[mod_idx];
+        assert!(plan.contains_symbol(mod_module, "Shared"));
+        assert!(!plan.contains_symbol(mod_module, "shared"));
     }
 
     #[test]
@@ -360,10 +359,9 @@ mod tests {
             .resolve_internal_specifier("./leaf")
             .expect("leaf should resolve");
 
-        let leaf_needed = plan.map.get(&leaf_idx).expect("leaf should be tracked");
-        let leaf_needed = leaf_needed.as_ref().expect("leaf should stay partially needed");
-        assert!(leaf_needed.contains("Marker"));
-        assert!(leaf_needed.contains("Foo"));
+        let leaf_module = &scan_result.modules[leaf_idx];
+        assert!(plan.contains_symbol(leaf_module, "Marker"));
+        assert!(plan.contains_symbol(leaf_module, "Foo"));
 
         let foo_reasons =
             plan.reasons_for(leaf_idx, "Foo").expect("Foo should have reasons in leaf");
@@ -391,10 +389,9 @@ mod tests {
         let plan = build_needed_names(entry, &scan_result);
         let leaf_idx = entry.resolve_internal_specifier("./leaf").expect("leaf should resolve");
 
-        let leaf_needed = plan.map.get(&leaf_idx).expect("leaf should be tracked");
-        let leaf_needed = leaf_needed.as_ref().expect("leaf should stay partially needed");
-        assert!(leaf_needed.contains("A"));
-        assert!(leaf_needed.contains("B"));
+        let leaf_module = &scan_result.modules[leaf_idx];
+        assert!(plan.contains_symbol(leaf_module, "A"));
+        assert!(plan.contains_symbol(leaf_module, "B"));
 
         let a_reasons = plan.reasons_for(leaf_idx, "A").expect("A should have reasons in leaf");
         assert!(a_reasons.contains(&NeededReason::CrossModuleImportDependency));
