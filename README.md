@@ -6,6 +6,8 @@ A native TypeScript declaration (`.d.ts`) bundler built on [Oxc](https://oxc.rs)
 
 Bundles one or more `.d.ts` entry points into a single output file using a three-stage AST pipeline — no TypeScript compiler required.
 
+**[Try it in the REPL →](https://typack.pages.dev)**
+
 ## Features
 
 - **Fast** — native Rust implementation powered by the Oxc parser, no `tsc` dependency

@@ -1,0 +1,28 @@
+{
+  "name": "@typack/repl",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@monaco-editor/loader": "^1.5.0",
+    "monaco-editor": "^0.52.0",
+    "pako": "^2.1.0",
+    "splitpanes": "^3.1.7",
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@emnapi/core": "^1.7.1",
+    "@emnapi/runtime": "^1.7.1",
+    "@napi-rs/wasm-runtime": "^1.1.0",
+    "@tybys/wasm-util": "^0.10.1",
+    "@vitejs/plugin-vue": "^5.2.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.2.0",
+    "wrangler": "^4.71.0"
+  }
+}

@@ -22,10 +22,3 @@ export interface BundleDtsResult {
   map?: string;
   warnings: Array<BundleDtsDiagnostic>;
 }
-
-/**
- * Run the CLI with the given argv (pass `process.argv`; argv[0] and argv[1] are skipped).
- *
- * All output is written to stdout/stderr and the process exits when done.
- */
-export declare function cli(argv: Array<string>): void;

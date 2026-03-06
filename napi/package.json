@@ -33,12 +33,14 @@
   },
   "scripts": {
     "build": "pnpm run build-napi-release",
-    "build-napi": "napi build --platform --js index.js --dts index.d.ts --output-dir . --no-dts-cache",
+    "build-napi": "napi build --platform --features cli --js index.js --dts index.d.ts --output-dir . --no-dts-cache",
     "build-napi-release": "pnpm run build-napi --release",
+    "build-wasm": "napi build --target wasm32-wasip1-threads --release --js index.js --dts index.d.ts --output-dir .",
     "smoke": "node -e \"const m=require('./index.js'); if(typeof m.bundle!=='function'){throw new Error('bundle is missing')}\""
   },
   "devDependencies": {
-    "@napi-rs/cli": "^3.2.0"
+    "@napi-rs/cli": "^3.2.0",
+    "@napi-rs/wasm-runtime": "^1.1.0"
   },
   "napi": {
     "binaryName": "typack",
@@ -51,7 +53,8 @@
       "x86_64-apple-darwin",
       "x86_64-pc-windows-msvc",
       "x86_64-unknown-linux-gnu",
-      "x86_64-unknown-linux-musl"
+      "x86_64-unknown-linux-musl",
+      "wasm32-wasip1-threads"
     ]
   },
   "engines": {
