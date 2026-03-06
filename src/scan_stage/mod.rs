@@ -358,12 +358,16 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
 
     fn resolve_entry_path(entry: &str) -> Result<PathBuf, Vec<OxcDiagnostic>> {
         let entry_path = PathBuf::from(entry);
-        entry_path.canonicalize().map_err(|e| {
-            vec![OxcDiagnostic::error(format!(
+        // Try canonicalize first (resolves symlinks), fall back to checking
+        // existence directly for platforms that don't support it (e.g. WASI).
+        match entry_path.canonicalize() {
+            Ok(p) => Ok(p),
+            Err(_) if entry_path.exists() => Ok(entry_path),
+            Err(e) => Err(vec![OxcDiagnostic::error(format!(
                 "Cannot resolve entry point {}: {e}",
                 entry_path.display()
-            ))]
-        })
+            ))]),
+        }
     }
 
     /// Compute a path relative to the CWD for region markers.
