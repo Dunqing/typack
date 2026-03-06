@@ -70,7 +70,7 @@ onMounted(async () => {
     },
     resolveLink(link: any) {
       emit("update:active-file", link.data);
-      return link;
+      return { ...link, url: monaco.Uri.parse(`file:///${link.data}`) };
     },
   });
 
