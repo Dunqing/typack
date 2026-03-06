@@ -8,7 +8,7 @@ export default defineConfig({
     target: "esnext",
   },
   optimizeDeps: {
-    exclude: ["@napi-rs/wasm-runtime"],
+    exclude: ["@napi-rs/wasm-runtime", "@emnapi/core", "@emnapi/runtime", "@tybys/wasm-util"],
   },
   server: {
     headers: {
