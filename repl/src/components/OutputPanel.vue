@@ -41,9 +41,18 @@ watch(
   },
 );
 
+function utf8ToBase64(input: string): string {
+  const bytes = new TextEncoder().encode(input);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
 function openSourceMapViz() {
   if (!props.map || !props.code) return;
-  const url = `https://evanw.github.io/source-map-visualization/#${btoa(
+  const url = `https://evanw.github.io/source-map-visualization/#${utf8ToBase64(
     `${props.code.length}\0${props.code}${props.map.length}\0${props.map}`,
   )}`;
   window.open(url, "_blank");

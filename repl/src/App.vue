@@ -47,7 +47,7 @@ watch(ready, (isReady) => {
 <template>
   <div class="app">
     <HeaderBar :loading="loading" :ready="ready" :bundle-time="bundleTime" />
-    <Splitpanes class="default-theme main-panes" @resized="() => {}">
+    <Splitpanes class="default-theme main-panes">
       <Pane :size="50" :min-size="20">
         <EditorPanel
           :files="files"

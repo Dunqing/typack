@@ -20,7 +20,7 @@ defineProps<{
       <a
         href="https://github.com/Dunqing/typack"
         target="_blank"
-        rel="noopener"
+        rel="noopener noreferrer"
         class="github-link"
         title="View on GitHub"
       >

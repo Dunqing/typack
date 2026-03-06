@@ -117,9 +117,12 @@ export function useTypack() {
         vol.writeFileSync(`/src/${name}`, content, "utf8");
       }
 
+      const fileNames = Object.keys(files);
+      const entry = fileNames.includes("index.d.ts") ? "index.d.ts" : fileNames[0];
+
       const start = performance.now();
       const result = typackModule.bundle({
-        input: ["/src/index.d.ts"],
+        input: [`/src/${entry}`],
         cwd: "/src",
         sourcemap: true,
       });

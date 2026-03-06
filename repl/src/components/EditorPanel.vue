@@ -20,6 +20,7 @@ const emit = defineEmits<{
 const editorContainer = ref<HTMLDivElement>();
 let editor: any = null;
 let monaco: any = null;
+let linkProviderDisposable: any = null;
 
 onMounted(async () => {
   monaco = await loader.init();
@@ -54,7 +55,7 @@ onMounted(async () => {
   });
 
   // Make import paths clickable — clicking navigates to the target file
-  monaco.languages.registerLinkProvider("typescript", {
+  linkProviderDisposable = monaco.languages.registerLinkProvider("typescript", {
     provideLinks(model: any) {
       const links: any[] = [];
       for (let i = 1; i <= model.getLineCount(); i++) {
@@ -118,6 +119,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  linkProviderDisposable?.dispose();
   editor?.dispose();
 });
 

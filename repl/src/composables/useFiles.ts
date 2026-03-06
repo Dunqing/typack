@@ -41,6 +41,7 @@ export function useFiles(initial?: FileEntry[]) {
   }
 
   function renameFile({ oldName, newName }: { oldName: string; newName: string }) {
+    if (/[/\\]|\.\./.test(newName)) return;
     const file = files.value.find((f) => f.name === oldName);
     if (!file) return;
     if (files.value.some((f) => f.name === newName)) return;

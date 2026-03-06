@@ -8,10 +8,23 @@ interface SerializedState {
   active: string;
 }
 
+function uint8ToBase64(bytes: Uint8Array): string {
+  const chunks: string[] = [];
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    const slice = bytes.subarray(i, i + 0x8000);
+    let str = "";
+    for (let j = 0; j < slice.length; j++) {
+      str += String.fromCharCode(slice[j]);
+    }
+    chunks.push(str);
+  }
+  return btoa(chunks.join(""));
+}
+
 function compress(data: string): string {
   try {
     const bytes = pako.deflate(new TextEncoder().encode(data));
-    return btoa(String.fromCharCode(...bytes));
+    return uint8ToBase64(bytes);
   } catch {
     return btoa(encodeURIComponent(data));
   }
