@@ -50,7 +50,8 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy repl/dist --project-name=typack --branch=${{ github.ref_name }}
+          packageManager: npx
+          command: pages deploy repl/dist --project-name=typack --branch=${{ github.head_ref || github.ref_name }}
 
       - name: Comment preview URL on PR
         if: github.event_name == 'pull_request'
