@@ -5,8 +5,8 @@ use std::collections::hash_map::Entry;
 
 use oxc_ast::ast::{
     Declaration, ExportDefaultDeclarationKind, Expression, IdentifierReference,
-    ImportDeclarationSpecifier, Statement, TSImportTypeQualifier, TSModuleReference, TSType,
-    TSTypeName, TSTypeQuery, TSTypeQueryExprName,
+    ImportDeclarationSpecifier, Statement, TSImportTypeQualifier, TSModuleReference, TSTypeName,
+    TSTypeQuery,
 };
 use oxc_ast_visit::Visit;
 use oxc_span::Ident;
@@ -26,6 +26,14 @@ struct DeclarationDependency {
     declared_names: Vec<String>,
     declared_root_symbols: FxHashMap<SymbolId, NeededKindFlags>,
     referenced_root_symbols: FxHashMap<SymbolId, NeededKindFlags>,
+}
+
+struct ModuleDeps {
+    declarations: Vec<DeclarationDependency>,
+    /// `import("./dep").Foo` — named inline import references.
+    inline_refs: Vec<(ModuleIdx, String)>,
+    /// `import("./dep")` without qualifier — target module is fully needed.
+    inline_whole: Vec<ModuleIdx>,
 }
 
 /// Build a map of which names are needed from each module (tree-shaking).
@@ -203,6 +211,17 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
         scan_result,
     );
 
+    // Pre-compute declaration dependencies and inline imports per module
+    // (avoids re-walking AST on every fixpoint iteration — both are static).
+    let mut cached_deps: FxHashMap<ModuleIdx, ModuleDeps> = FxHashMap::default();
+
+    // Seed inline import refs from the entry module (all declarations retained).
+    let mut inline_imports_processed: FxHashSet<ModuleIdx> = FxHashSet::default();
+    let entry_deps = collect_declaration_dependencies(entry, scan_result);
+    apply_inline_imports(&entry_deps, &mut needed, &mut reasons);
+    cached_deps.insert(entry.idx, entry_deps);
+    inline_imports_processed.insert(entry.idx);
+
     // Propagate needed names through intermediate modules.
     // If module M needs {"B"} and M does `export * from "./sub"`,
     // check if sub provides B and add sub → {"B"} if so.
@@ -221,8 +240,11 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
                 continue;
             };
             let direct_needed = direct_needed.clone();
+            let deps = cached_deps
+                .entry(module.idx)
+                .or_insert_with(|| collect_declaration_dependencies(module, scan_result));
             let (expanded, expanded_symbol_kinds) =
-                expand_needed_names_semantic(module, &direct_needed);
+                expand_needed_names_semantic(module, &direct_needed, &deps.declarations);
             for name in expanded.iter().filter(|name| !direct_needed.contains(*name)) {
                 add_needed_reason(&mut reasons, module.idx, name, NeededReason::SemanticDependency);
             }
@@ -241,7 +263,18 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
             &mut reasons,
             scan_result,
         );
-        changed |= propagate_inline_import_references(&mut needed, &mut reasons, scan_result);
+
+        // Apply inline import references for newly-added modules.
+        // Each module is processed at most once.
+        for module in &scan_result.modules {
+            if !needed.contains_key(&module.idx) || !inline_imports_processed.insert(module.idx) {
+                continue;
+            }
+            let deps = cached_deps
+                .entry(module.idx)
+                .or_insert_with(|| collect_declaration_dependencies(module, scan_result));
+            changed |= apply_inline_imports(deps, &mut needed, &mut reasons);
+        }
 
         if !changed {
             break;
@@ -287,6 +320,30 @@ fn add_namespace_requirement(
             add_needed_reason(reasons, target_idx, &name, NeededReason::NamespaceRequirement);
         }
     }
+}
+
+fn apply_inline_imports(
+    deps: &ModuleDeps,
+    needed: &mut FxHashMap<ModuleIdx, Option<FxHashSet<String>>>,
+    reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
+) -> bool {
+    let mut changed = false;
+    for &target_idx in &deps.inline_whole {
+        if needed.get(&target_idx) != Some(&None) {
+            needed.insert(target_idx, None);
+            changed = true;
+        }
+    }
+    for (target_idx, name) in &deps.inline_refs {
+        changed |= add_partial_needed_name(
+            needed,
+            reasons,
+            *target_idx,
+            name,
+            NeededReason::InlineImportReference,
+        );
+    }
+    changed
 }
 
 fn add_needed_reason(
@@ -400,19 +457,32 @@ fn propagate_entry_declaration_import_references(
     changed
 }
 
-struct RootReferenceCollector<'s> {
+struct RootReferenceCollector<'s, 'a> {
     scoping: &'s oxc_semantic::Scoping,
     root_symbols: &'s FxHashSet<SymbolId>,
     referenced_symbols: FxHashMap<SymbolId, NeededKindFlags>,
+    module: &'s Module<'a>,
+    scan_result: &'s ScanResult<'a>,
+    inline_refs: Vec<(ModuleIdx, String)>,
+    inline_whole: Vec<ModuleIdx>,
 }
 
-impl<'s> RootReferenceCollector<'s> {
-    fn new(scoping: &'s oxc_semantic::Scoping, root_symbols: &'s FxHashSet<SymbolId>) -> Self {
-        Self { scoping, root_symbols, referenced_symbols: FxHashMap::default() }
-    }
-
-    fn finish(self) -> FxHashMap<SymbolId, NeededKindFlags> {
-        self.referenced_symbols
+impl<'s, 'a> RootReferenceCollector<'s, 'a> {
+    fn new(
+        scoping: &'s oxc_semantic::Scoping,
+        root_symbols: &'s FxHashSet<SymbolId>,
+        module: &'s Module<'a>,
+        scan_result: &'s ScanResult<'a>,
+    ) -> Self {
+        Self {
+            scoping,
+            root_symbols,
+            referenced_symbols: FxHashMap::default(),
+            module,
+            scan_result,
+            inline_refs: Vec::new(),
+            inline_whole: Vec::new(),
+        }
     }
 
     fn record_symbol(&mut self, symbol_id: SymbolId, kind: NeededKindFlags) {
@@ -491,7 +561,7 @@ impl<'s> RootReferenceCollector<'s> {
     }
 }
 
-impl<'a> Visit<'a> for RootReferenceCollector<'_> {
+impl<'a> Visit<'a> for RootReferenceCollector<'_, 'a> {
     fn visit_export_named_declaration(&mut self, decl: &oxc_ast::ast::ExportNamedDeclaration<'a>) {
         if let Some(declaration) = &decl.declaration {
             self.visit_declaration(declaration);
@@ -557,49 +627,57 @@ impl<'a> Visit<'a> for RootReferenceCollector<'_> {
             oxc_ast_visit::walk::walk_ts_type_query(self, ty);
         }
     }
-}
 
-fn collect_referenced_root_symbols_in_declarations(module: &Module<'_>) -> FxHashSet<SymbolId> {
-    let root_scope_id = module.scoping.root_scope_id();
-    let root_symbols: FxHashSet<SymbolId> =
-        module.scoping.get_bindings(root_scope_id).values().copied().collect();
-    let mut references = FxHashSet::default();
-
-    for stmt in &module.program.body {
-        let mut declared_names = Vec::new();
-        collect_statement_declaration_names(stmt, &mut declared_names);
-        // Also visit module augmentation blocks (`declare module "..."`) which
-        // have string literal names and thus produce no declared_names, but
-        // can still reference imported types that need to be pulled in.
-        let is_module_augmentation = is_module_augmentation_stmt(stmt);
-        if declared_names.is_empty() && !is_module_augmentation {
-            continue;
-        }
-
-        let mut collector = RootReferenceCollector::new(&module.scoping, &root_symbols);
-        collector.visit_statement(stmt);
-        references.extend(collector.finish().into_keys());
-    }
-
-    references
-}
-
-/// Check if a statement is a module augmentation (`declare module "..."`)
-/// with a string literal name (as opposed to a namespace declaration with
-/// an identifier name like `declare module Foo { ... }`).
-fn is_module_augmentation_stmt(stmt: &Statement<'_>) -> bool {
-    let module_decl = match stmt {
-        Statement::TSModuleDeclaration(decl) => Some(decl.as_ref()),
-        Statement::ExportNamedDeclaration(export_decl) => {
-            if let Some(Declaration::TSModuleDeclaration(decl)) = &export_decl.declaration {
-                Some(decl.as_ref())
+    fn visit_ts_import_type(&mut self, import_type: &oxc_ast::ast::TSImportType<'a>) {
+        if let Some(target_idx) =
+            self.module.resolve_internal_specifier(import_type.source.value.as_str())
+        {
+            if let Some(qualifier) = &import_type.qualifier {
+                let first_name = extract_qualifier_first_name(qualifier);
+                let target_module = &self.scan_result.modules[target_idx];
+                let local_name =
+                    resolve_export_local_name(target_module, &first_name).unwrap_or(first_name);
+                self.inline_refs.push((target_idx, local_name));
             } else {
-                None
+                self.inline_whole.push(target_idx);
             }
         }
-        _ => None,
-    };
-    module_decl.is_some_and(|decl| decl.id.is_string_literal())
+        oxc_ast_visit::walk::walk_ts_import_type(self, import_type);
+    }
+
+    fn visit_ts_import_equals_declaration(
+        &mut self,
+        decl: &oxc_ast::ast::TSImportEqualsDeclaration<'a>,
+    ) {
+        if let TSModuleReference::ExternalModuleReference(ext) = &decl.module_reference
+            && let Some(target_idx) =
+                self.module.resolve_internal_specifier(ext.expression.value.as_str())
+        {
+            self.inline_whole.push(target_idx);
+        }
+        oxc_ast_visit::walk::walk_ts_import_equals_declaration(self, decl);
+    }
+}
+
+/// Collect all root-scope symbols that are referenced by declarations in the
+/// entry module.
+///
+/// The entry module keeps its full body, but its import bindings still need
+/// to be propagated to source modules.  This function checks which root-scope
+/// symbols have any resolved references (e.g. an imported type used inside a
+/// `declare global` block).  The caller
+/// (`propagate_entry_declaration_import_references`) then maps those symbols
+/// back to import declarations and seeds the needed-names of the target
+/// modules.
+fn collect_referenced_root_symbols_in_declarations(module: &Module<'_>) -> FxHashSet<SymbolId> {
+    let root_scope_id = module.scoping.root_scope_id();
+    let mut references = FxHashSet::default();
+    for &symbol_id in module.scoping.get_bindings(root_scope_id).values() {
+        if !module.scoping.get_resolved_reference_ids(symbol_id).is_empty() {
+            references.insert(symbol_id);
+        }
+    }
+    references
 }
 
 fn declaration_needed_kinds(decl: &Declaration<'_>) -> NeededKindFlags {
@@ -633,10 +711,16 @@ fn statement_declaration_needed_kinds(stmt: &Statement<'_>) -> NeededKindFlags {
     }
 }
 
-fn collect_declaration_dependencies(module: &Module<'_>) -> Vec<DeclarationDependency> {
+fn collect_declaration_dependencies<'a>(
+    module: &Module<'a>,
+    scan_result: &ScanResult<'a>,
+) -> ModuleDeps {
     let root_scope_id = module.scoping.root_scope_id();
     let root_symbols: FxHashSet<SymbolId> =
         module.scoping.get_bindings(root_scope_id).values().copied().collect();
+
+    let mut collector =
+        RootReferenceCollector::new(&module.scoping, &root_symbols, module, scan_result);
 
     let mut dependencies = Vec::new();
     for stmt in &module.program.body {
@@ -661,9 +745,8 @@ fn collect_declaration_dependencies(module: &Module<'_>) -> Vec<DeclarationDepen
             })
             .collect();
 
-        let mut collector = RootReferenceCollector::new(&module.scoping, &root_symbols);
         collector.visit_statement(stmt);
-        let mut referenced_root_symbols = collector.finish();
+        let mut referenced_root_symbols = std::mem::take(&mut collector.referenced_symbols);
 
         // Compatibility: when a needed namespace declaration defines names that shadow
         // root bindings, retain those root declarations as well.
@@ -703,15 +786,18 @@ fn collect_declaration_dependencies(module: &Module<'_>) -> Vec<DeclarationDepen
             referenced_root_symbols,
         });
     }
-    dependencies
+    ModuleDeps {
+        declarations: dependencies,
+        inline_refs: collector.inline_refs,
+        inline_whole: collector.inline_whole,
+    }
 }
 
 fn expand_needed_names_semantic(
     module: &Module<'_>,
     direct: &FxHashSet<String>,
+    dependencies: &[DeclarationDependency],
 ) -> (FxHashSet<String>, FxHashMap<SymbolId, NeededKindFlags>) {
-    let dependencies = collect_declaration_dependencies(module);
-
     let mut needed_names: FxHashSet<String> = FxHashSet::default();
     let mut needed_symbols: FxHashMap<SymbolId, NeededKindFlags> = FxHashMap::default();
 
@@ -736,7 +822,7 @@ fn expand_needed_names_semantic(
     while changed {
         changed = false;
 
-        for dep in &dependencies {
+        for dep in dependencies {
             let declaration_is_needed =
                 dep.declared_root_symbols.iter().any(|(symbol_id, decl_kinds)| {
                     needed_symbols
@@ -762,7 +848,7 @@ fn expand_needed_names_semantic(
 
     // Collect all symbols covered by declaration entries.
     let mut declared_symbols: FxHashSet<SymbolId> = FxHashSet::default();
-    for dep in &dependencies {
+    for dep in dependencies {
         declared_symbols.extend(dep.declared_root_symbols.keys().copied());
     }
 
@@ -1013,116 +1099,4 @@ fn extract_qualifier_first_name(qualifier: &TSImportTypeQualifier<'_>) -> String
         TSImportTypeQualifier::Identifier(ident) => ident.name.to_string(),
         TSImportTypeQualifier::QualifiedName(q) => extract_qualifier_first_name(&q.left),
     }
-}
-
-/// Visitor that collects inline import type references from AST nodes.
-///
-/// Finds `import("./dep").Qualifier` patterns and records which symbols are
-/// needed from which target modules.
-struct InlineImportRefCollector<'m, 'a, 'out> {
-    module: &'m Module<'a>,
-    scan_result: &'m ScanResult<'a>,
-    additions: &'out mut Vec<(ModuleIdx, String)>,
-    whole_needed: &'out mut Vec<ModuleIdx>,
-}
-
-impl<'a> Visit<'a> for InlineImportRefCollector<'_, 'a, '_> {
-    fn visit_ts_type(&mut self, it: &TSType<'a>) {
-        if let TSType::TSImportType(import_type) = it
-            && let Some(target_idx) =
-                self.module.resolve_internal_specifier(import_type.source.value.as_str())
-        {
-            if let Some(qualifier) = &import_type.qualifier {
-                let first_name = extract_qualifier_first_name(qualifier);
-                let target_module = &self.scan_result.modules[target_idx];
-                let local_name =
-                    resolve_export_local_name(target_module, &first_name).unwrap_or(first_name);
-                self.additions.push((target_idx, local_name));
-            } else {
-                self.whole_needed.push(target_idx);
-            }
-        }
-        oxc_ast_visit::walk::walk_ts_type(self, it);
-    }
-
-    fn visit_ts_type_query(&mut self, it: &TSTypeQuery<'a>) {
-        if let TSTypeQueryExprName::TSImportType(import_type) = &it.expr_name
-            && let Some(target_idx) =
-                self.module.resolve_internal_specifier(import_type.source.value.as_str())
-        {
-            if let Some(qualifier) = &import_type.qualifier {
-                let first_name = extract_qualifier_first_name(qualifier);
-                let target_module = &self.scan_result.modules[target_idx];
-                let local_name =
-                    resolve_export_local_name(target_module, &first_name).unwrap_or(first_name);
-                self.additions.push((target_idx, local_name));
-            } else {
-                self.whole_needed.push(target_idx);
-            }
-        }
-        oxc_ast_visit::walk::walk_ts_type_query(self, it);
-    }
-
-    fn visit_ts_import_equals_declaration(
-        &mut self,
-        decl: &oxc_ast::ast::TSImportEqualsDeclaration<'a>,
-    ) {
-        if let TSModuleReference::ExternalModuleReference(ext) = &decl.module_reference
-            && let Some(target_idx) =
-                self.module.resolve_internal_specifier(ext.expression.value.as_str())
-        {
-            self.whole_needed.push(target_idx);
-        }
-        oxc_ast_visit::walk::walk_ts_import_equals_declaration(self, decl);
-    }
-}
-
-/// Propagate needed names through inline import type references.
-///
-/// When a module's retained declarations contain `import("./dep").Missing`,
-/// this adds `Missing` to `./dep`'s needed set. For `import X = require("./dep")`,
-/// it marks the target module as whole-needed.
-///
-/// Returns `true` if any new names were added.
-fn propagate_inline_import_references(
-    needed: &mut FxHashMap<ModuleIdx, Option<FxHashSet<String>>>,
-    reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
-    scan_result: &ScanResult<'_>,
-) -> bool {
-    let mut changed = false;
-    let mut additions: Vec<(ModuleIdx, String)> = Vec::new();
-    let mut whole_needed: Vec<ModuleIdx> = Vec::new();
-
-    for module in &scan_result.modules {
-        if !module.is_entry && !needed.contains_key(&module.idx) {
-            continue;
-        }
-
-        let mut collector = InlineImportRefCollector {
-            module,
-            scan_result,
-            additions: &mut additions,
-            whole_needed: &mut whole_needed,
-        };
-        collector.visit_program(&module.program);
-    }
-
-    for target_idx in whole_needed {
-        if needed.get(&target_idx) != Some(&None) {
-            needed.insert(target_idx, None);
-            changed = true;
-        }
-    }
-
-    for (target_idx, name) in additions {
-        changed |= add_partial_needed_name(
-            needed,
-            reasons,
-            target_idx,
-            &name,
-            NeededReason::InlineImportReference,
-        );
-    }
-
-    changed
 }
