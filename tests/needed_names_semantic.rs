@@ -100,3 +100,37 @@ fn keeps_local_export_specifier_dependencies_inside_namespaces() {
     );
     assert!(output.contains("declare namespace Ns {"), "expected namespace export\n{output}");
 }
+
+#[test]
+fn inline_import_type_with_reexport_includes_both_names() {
+    let project = TempProject::new("inline_import_type_with_reexport");
+    project.write_file(
+        "dep.d.ts",
+        "export interface Keep { kept: true }\nexport interface Missing { found: true }\nexport interface Unused { shouldNotAppear: true }\n",
+    );
+    project.write_file(
+        "index.d.ts",
+        "export type { Keep } from \"./dep\";\nexport type Found = import(\"./dep\").Missing;\n",
+    );
+
+    let output = normalize_newlines(&bundle(&project, "index.d.ts"));
+    assert!(output.contains("interface Keep {"), "expected Keep\n{output}");
+    assert!(output.contains("interface Missing {"), "expected Missing\n{output}");
+    assert!(output.contains("type Found = Missing;"), "expected Found using Missing\n{output}");
+    assert!(!output.contains("Unused"), "did not expect tree-shaken Unused\n{output}");
+}
+
+#[test]
+fn inline_import_type_transitive_dependency() {
+    let project = TempProject::new("inline_import_transitive");
+    project.write_file(
+        "dep.d.ts",
+        "interface Base { base: string }\nexport interface Child extends Base { child: true }\nexport interface Unused { x: number }\n",
+    );
+    project.write_file("index.d.ts", "export type T = import(\"./dep\").Child;\n");
+
+    let output = normalize_newlines(&bundle(&project, "index.d.ts"));
+    assert!(output.contains("interface Base {"), "expected transitive Base\n{output}");
+    assert!(output.contains("interface Child extends Base {"), "expected Child\n{output}");
+    assert!(!output.contains("Unused"), "did not expect Unused\n{output}");
+}
