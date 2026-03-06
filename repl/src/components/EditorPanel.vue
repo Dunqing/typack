@@ -24,9 +24,67 @@ let monaco: any = null;
 onMounted(async () => {
   monaco = await loader.init();
   if (!editorContainer.value) return;
+
+  monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+    target: monaco.languages.typescript.ScriptTarget.ESNext,
+    module: monaco.languages.typescript.ModuleKind.ESNext,
+    moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+    declaration: true,
+    allowImportingTsExtensions: true,
+    noEmit: true,
+  });
+  monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+    noSemanticValidation: true,
+  });
+
+  // Make import paths clickable — clicking navigates to the target file
+  monaco.languages.registerLinkProvider("typescript", {
+    provideLinks(model: any) {
+      const links: any[] = [];
+      for (let i = 1; i <= model.getLineCount(); i++) {
+        const line = model.getLineContent(i);
+        const re = /(?:from|import)\s+(['"])(\.[^'"]+)\1/g;
+        let m;
+        while ((m = re.exec(line)) !== null) {
+          const specifier = m[2];
+          const bare = specifier.replace(/^\.\//, "");
+          const candidates = [bare, bare + ".d.ts", bare + ".ts"];
+          const target = candidates.find((c) => props.files.some((f) => f.name === c));
+          if (!target) continue;
+
+          const specStart = m.index + m[0].indexOf(m[2]) + 1;
+          const specEnd = specStart + m[2].length;
+          links.push({
+            range: {
+              startLineNumber: i,
+              startColumn: specStart,
+              endLineNumber: i,
+              endColumn: specEnd,
+            },
+            tooltip: `Go to ${target}`,
+            data: target,
+          });
+        }
+      }
+      return { links };
+    },
+    resolveLink(link: any) {
+      emit("update:active-file", link.data);
+      return link;
+    },
+  });
+
+  // Create models for all files
+  for (const file of props.files) {
+    const uri = monaco.Uri.parse(`file:///${file.name}`);
+    if (!monaco.editor.getModel(uri)) {
+      monaco.editor.createModel(file.content, "typescript", uri);
+    }
+  }
+
+  const activeUri = monaco.Uri.parse(`file:///${props.activeFile}`);
   editor = monaco.editor.create(editorContainer.value, {
-    value: currentContent(),
-    language: "typescript",
+    model: monaco.editor.getModel(activeUri),
     theme: "vs-dark",
     minimap: { enabled: false },
     fontSize: 13,
@@ -56,11 +114,13 @@ watch(
   () => props.activeFile,
   () => {
     nextTick(() => {
-      if (editor) {
-        const val = currentContent();
-        if (editor.getValue() !== val) {
-          editor.setValue(val);
+      if (editor && monaco) {
+        const uri = monaco.Uri.parse(`file:///${props.activeFile}`);
+        let model = monaco.editor.getModel(uri);
+        if (!model) {
+          model = monaco.editor.createModel(currentContent(), "typescript", uri);
         }
+        editor.setModel(model);
       }
     });
   },
