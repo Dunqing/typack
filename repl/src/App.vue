@@ -1,16 +1,23 @@
 <script setup lang="ts">
 import { Splitpanes, Pane } from "splitpanes";
+import { reactive } from "vue";
 
 import "splitpanes/dist/splitpanes.css";
 import EditorPanel from "./components/EditorPanel.vue";
 import HeaderBar from "./components/HeaderBar.vue";
+import OptionsPanel from "./components/OptionsPanel.vue";
 import OutputPanel from "./components/OutputPanel.vue";
 import { useFiles } from "./composables/useFiles";
-import { useTypack } from "./composables/useTypack";
+import { useTypack, type BundleOptions } from "./composables/useTypack";
 import { useUrlState } from "./composables/useUrlState";
 
 const { files, activeFile, addFile, removeFile, renameFile, updateContent } = useFiles();
 const { output, diagnostics, loading, ready, bundle } = useTypack();
+const options = reactive<BundleOptions>({
+  sourcemap: true,
+  cjsDefault: false,
+  external: [],
+});
 
 useUrlState(files, activeFile);
 
@@ -19,13 +26,14 @@ function runBundle() {
   for (const f of files.value) {
     fileMap[f.name] = f.content;
   }
-  bundle(fileMap);
+  bundle(fileMap, options);
 }
 </script>
 
 <template>
   <div class="app">
     <HeaderBar :loading="loading" :ready="ready" @bundle="runBundle" />
+    <OptionsPanel v-model="options" />
     <Splitpanes class="default-theme main-panes" @resized="() => {}">
       <Pane :size="50" :min-size="20">
         <EditorPanel
