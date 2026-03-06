@@ -35,7 +35,9 @@ onMounted(async () => {
   });
   monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
     noSemanticValidation: true,
+    noSyntaxValidation: true,
   });
+  monaco.languages.typescript.typescriptDefaults.setEagerModelSync(false);
 
   // Make import paths clickable — clicking navigates to the target file
   monaco.languages.registerLinkProvider("typescript", {
