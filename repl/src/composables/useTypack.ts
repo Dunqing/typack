@@ -32,6 +32,16 @@ export function useTypack() {
 
   async function init() {
     try {
+      // TextDecoder.decode() rejects SharedArrayBuffer-backed views;
+      // patch it to copy before decoding so the WASM runtime works.
+      const origDecode = TextDecoder.prototype.decode;
+      TextDecoder.prototype.decode = function (input?: BufferSource, options?: TextDecodeOptions) {
+        if (input && (input as any).buffer instanceof SharedArrayBuffer) {
+          input = new Uint8Array(input as ArrayBufferView as Uint8Array);
+        }
+        return origDecode.call(this, input, options);
+      };
+
       const { Volume, createFsFromVolume } = await import("@napi-rs/wasm-runtime/fs");
       const { instantiateNapiModuleSync, getDefaultContext, WASI } =
         await import("@napi-rs/wasm-runtime");
