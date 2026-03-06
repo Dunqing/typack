@@ -27,6 +27,9 @@ jobs:
         with:
           targets: wasm32-wasip1-threads
 
+      - name: Ensure WASM target is installed
+        run: rustup target add wasm32-wasip1-threads
+
       - name: Install dependencies
         run: pnpm install
 
