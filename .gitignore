@@ -20,3 +20,15 @@ node_modules/
 # OS files
 .DS_Store
 Thumbs.db
+
+# WASM build artifacts
+napi/*.wasm
+napi/*.wasi.cjs
+napi/*.wasi-browser.js
+napi/browser.js
+napi/wasi-worker-browser.mjs
+napi/wasi-worker.mjs
+
+# REPL build output
+repl/dist/
+repl/public/wasm/

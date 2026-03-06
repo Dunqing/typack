@@ -11,9 +11,12 @@ crate-type = ["cdylib"]
 [build-dependencies]
 napi-build = "2.1.5"
 
+[features]
+cli = ["typack/cli"]
+
 [dependencies]
 napi = "3.4.0"
 napi-derive = "3.2.1"
-typack = { path = "..", features = ["cli"] }
+typack = { path = ".." }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
