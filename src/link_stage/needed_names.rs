@@ -5,7 +5,8 @@ use std::collections::hash_map::Entry;
 
 use oxc_ast::ast::{
     Declaration, ExportDefaultDeclarationKind, Expression, IdentifierReference,
-    ImportDeclarationSpecifier, Statement, TSTypeName, TSTypeQuery,
+    ImportDeclarationSpecifier, Statement, TSImportTypeQualifier, TSModuleReference, TSType,
+    TSTypeName, TSTypeQuery, TSTypeQueryExprName,
 };
 use oxc_ast_visit::Visit;
 use oxc_span::Ident;
@@ -240,6 +241,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
             &mut reasons,
             scan_result,
         );
+        changed |= propagate_inline_import_references(&mut needed, &mut reasons, scan_result);
 
         if !changed {
             break;
@@ -998,6 +1000,128 @@ fn propagate_import_dependencies(
                 NeededReason::CrossModuleImportDependency,
             );
         }
+    }
+
+    changed
+}
+
+/// Extract the leftmost identifier from a `TSImportTypeQualifier`.
+///
+/// For `import("./dep").Missing.Sub`, returns `"Missing"`.
+fn extract_qualifier_first_name(qualifier: &TSImportTypeQualifier<'_>) -> String {
+    match qualifier {
+        TSImportTypeQualifier::Identifier(ident) => ident.name.to_string(),
+        TSImportTypeQualifier::QualifiedName(q) => extract_qualifier_first_name(&q.left),
+    }
+}
+
+/// Visitor that collects inline import type references from AST nodes.
+///
+/// Finds `import("./dep").Qualifier` patterns and records which symbols are
+/// needed from which target modules.
+struct InlineImportRefCollector<'m, 'a, 'out> {
+    module: &'m Module<'a>,
+    scan_result: &'m ScanResult<'a>,
+    additions: &'out mut Vec<(ModuleIdx, String)>,
+    whole_needed: &'out mut Vec<ModuleIdx>,
+}
+
+impl<'a> Visit<'a> for InlineImportRefCollector<'_, 'a, '_> {
+    fn visit_ts_type(&mut self, it: &TSType<'a>) {
+        if let TSType::TSImportType(import_type) = it
+            && let Some(target_idx) =
+                self.module.resolve_internal_specifier(import_type.source.value.as_str())
+        {
+            if let Some(qualifier) = &import_type.qualifier {
+                let first_name = extract_qualifier_first_name(qualifier);
+                let target_module = &self.scan_result.modules[target_idx];
+                let local_name =
+                    resolve_export_local_name(target_module, &first_name).unwrap_or(first_name);
+                self.additions.push((target_idx, local_name));
+            } else {
+                self.whole_needed.push(target_idx);
+            }
+        }
+        oxc_ast_visit::walk::walk_ts_type(self, it);
+    }
+
+    fn visit_ts_type_query(&mut self, it: &TSTypeQuery<'a>) {
+        if let TSTypeQueryExprName::TSImportType(import_type) = &it.expr_name
+            && let Some(target_idx) =
+                self.module.resolve_internal_specifier(import_type.source.value.as_str())
+        {
+            if let Some(qualifier) = &import_type.qualifier {
+                let first_name = extract_qualifier_first_name(qualifier);
+                let target_module = &self.scan_result.modules[target_idx];
+                let local_name =
+                    resolve_export_local_name(target_module, &first_name).unwrap_or(first_name);
+                self.additions.push((target_idx, local_name));
+            } else {
+                self.whole_needed.push(target_idx);
+            }
+        }
+        oxc_ast_visit::walk::walk_ts_type_query(self, it);
+    }
+
+    fn visit_ts_import_equals_declaration(
+        &mut self,
+        decl: &oxc_ast::ast::TSImportEqualsDeclaration<'a>,
+    ) {
+        if let TSModuleReference::ExternalModuleReference(ext) = &decl.module_reference
+            && let Some(target_idx) =
+                self.module.resolve_internal_specifier(ext.expression.value.as_str())
+        {
+            self.whole_needed.push(target_idx);
+        }
+        oxc_ast_visit::walk::walk_ts_import_equals_declaration(self, decl);
+    }
+}
+
+/// Propagate needed names through inline import type references.
+///
+/// When a module's retained declarations contain `import("./dep").Missing`,
+/// this adds `Missing` to `./dep`'s needed set. For `import X = require("./dep")`,
+/// it marks the target module as whole-needed.
+///
+/// Returns `true` if any new names were added.
+fn propagate_inline_import_references(
+    needed: &mut FxHashMap<ModuleIdx, Option<FxHashSet<String>>>,
+    reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
+    scan_result: &ScanResult<'_>,
+) -> bool {
+    let mut changed = false;
+    let mut additions: Vec<(ModuleIdx, String)> = Vec::new();
+    let mut whole_needed: Vec<ModuleIdx> = Vec::new();
+
+    for module in &scan_result.modules {
+        if !module.is_entry && !needed.contains_key(&module.idx) {
+            continue;
+        }
+
+        let mut collector = InlineImportRefCollector {
+            module,
+            scan_result,
+            additions: &mut additions,
+            whole_needed: &mut whole_needed,
+        };
+        collector.visit_program(&module.program);
+    }
+
+    for target_idx in whole_needed {
+        if needed.get(&target_idx) != Some(&None) {
+            needed.insert(target_idx, None);
+            changed = true;
+        }
+    }
+
+    for (target_idx, name) in additions {
+        changed |= add_partial_needed_name(
+            needed,
+            reasons,
+            target_idx,
+            &name,
+            NeededReason::InlineImportReference,
+        );
     }
 
     changed

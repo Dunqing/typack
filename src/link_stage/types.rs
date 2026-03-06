@@ -32,6 +32,7 @@ pub enum NeededReason {
     SemanticDependency,
     NamespaceRequirement,
     CrossModuleImportDependency,
+    InlineImportReference,
 }
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
