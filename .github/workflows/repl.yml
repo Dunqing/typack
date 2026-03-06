@@ -44,13 +44,16 @@ jobs:
       - name: Build REPL
         run: pnpm --filter @typack/repl run build
 
+      - name: Install wrangler
+        run: pnpm add -wD wrangler
+
       - name: Deploy to Cloudflare Pages
         id: deploy
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          packageManager: npx
+          packageManager: pnpm
           command: pages deploy repl/dist --project-name=typack --branch=${{ github.head_ref || github.ref_name }}
 
       - name: Comment preview URL on PR
