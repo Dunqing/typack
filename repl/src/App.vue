@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Splitpanes, Pane } from "splitpanes";
+import { watch } from "vue";
 
 import "splitpanes/dist/splitpanes.css";
 import EditorPanel from "./components/EditorPanel.vue";
@@ -10,22 +11,42 @@ import { useTypack } from "./composables/useTypack";
 import { useUrlState } from "./composables/useUrlState";
 
 const { files, activeFile, addFile, removeFile, renameFile, updateContent } = useFiles();
-const { output, diagnostics, loading, ready, bundle } = useTypack();
+const { output, diagnostics, loading, ready, bundleTime, bundle } = useTypack();
 
 useUrlState(files, activeFile);
 
-function runBundle() {
-  const fileMap: Record<string, string> = {};
-  for (const f of files.value) {
-    fileMap[f.name] = f.content;
+let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+watch(
+  files,
+  () => {
+    if (!ready.value) return;
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      const fileMap: Record<string, string> = {};
+      for (const f of files.value) {
+        fileMap[f.name] = f.content;
+      }
+      bundle(fileMap);
+    }, 300);
+  },
+  { deep: true },
+);
+
+watch(ready, (isReady) => {
+  if (isReady) {
+    const fileMap: Record<string, string> = {};
+    for (const f of files.value) {
+      fileMap[f.name] = f.content;
+    }
+    bundle(fileMap);
   }
-  bundle(fileMap);
-}
+});
 </script>
 
 <template>
   <div class="app">
-    <HeaderBar :loading="loading" :ready="ready" @bundle="runBundle" />
+    <HeaderBar :loading="loading" :ready="ready" :bundle-time="bundleTime" />
     <Splitpanes class="default-theme main-panes" @resized="() => {}">
       <Pane :size="50" :min-size="20">
         <EditorPanel

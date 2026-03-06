@@ -25,6 +25,7 @@ export function useTypack() {
   const diagnostics = ref<Diagnostic[]>([]);
   const loading = ref(false);
   const ready = ref(false);
+  const bundleTime = ref(0);
 
   let typackModule: TypackModule | null = null;
   let vol: any = null;
@@ -106,11 +107,14 @@ export function useTypack() {
         vol.writeFileSync(`/src/${name}`, content, "utf8");
       }
 
+      const start = performance.now();
       const result = typackModule.bundle({
         input: ["/src/index.d.ts"],
         cwd: "/src",
         sourcemap: true,
       });
+      const end = performance.now();
+      bundleTime.value = Math.round(end - start);
 
       output.value = { code: result.code, map: result.map ?? null };
       diagnostics.value = result.warnings ?? [];
@@ -129,5 +133,5 @@ export function useTypack() {
     }
   }
 
-  return { output, diagnostics, loading, ready, bundle };
+  return { output, diagnostics, loading, ready, bundleTime, bundle };
 }
