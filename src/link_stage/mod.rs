@@ -313,6 +313,28 @@ mod tests {
     }
 
     #[test]
+    fn local_export_alias_resolves_to_underlying_symbol() {
+        let project = TempProject::new("local_export_alias_resolves_symbol");
+        project.write_file(
+            "mod.d.ts",
+            "interface Internal { value: string }\nexport { Internal as Public }\n",
+        );
+        project.write_file("index.d.ts", "export { Public } from \"./mod\";\n");
+
+        let scan_result = project.scan("index.d.ts");
+        let entry = &scan_result.modules[scan_result.entry_idx];
+        let plan = build_needed_names(entry, &scan_result);
+        let mod_idx = entry.resolve_internal_specifier("./mod").expect("mod should resolve");
+        let mod_module = &scan_result.modules[mod_idx];
+
+        assert!(plan.contains_symbol(mod_module, "Internal"));
+        assert!(
+            !matches!(plan.map.get(&mod_idx), Some(Some(symbols)) if symbols.is_empty()),
+            "expected local alias to map to the underlying symbol"
+        );
+    }
+
+    #[test]
     fn merged_needed_names_keep_secondary_entries_whole() {
         let project = TempProject::new("merged_needed_names_keep_entries");
         project.write_file(

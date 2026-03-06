@@ -16,12 +16,11 @@ use crate::scan_stage::ScanResult;
 use crate::types::{ExportSource, ImportBindingKind, Module, ModuleIdx};
 
 use super::exports::{
-    collect_all_exported_names, collect_exported_names_from_program, resolve_export_local_name,
+    collect_all_exported_names, collect_public_exported_names, resolve_export_local_name,
 };
 use super::types::{NeededKindFlags, NeededNamesPlan, NeededReason};
 
 struct DeclarationNode {
-    declared_names: Vec<String>,
     declared_root_symbols: FxHashMap<SymbolId, NeededKindFlags>,
     local_symbol_deps: FxHashMap<SymbolId, NeededKindFlags>,
     cross_module_deps: Vec<CrossModuleDep>,
@@ -44,7 +43,7 @@ struct InlineImportDep {
 }
 
 struct ModuleExpansion {
-    expanded_names: FxHashSet<String>,
+    expanded_symbols: FxHashSet<SymbolId>,
     needed_symbols: FxHashMap<SymbolId, NeededKindFlags>,
     cross_module_deps: Vec<CrossModuleDep>,
     inline_import_deps: Vec<InlineImportDep>,
@@ -52,18 +51,27 @@ struct ModuleExpansion {
 
 pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> NeededNamesPlan {
     let declaration_graphs = build_declaration_graphs(scan_result);
-    let mut needed_names: FxHashMap<ModuleIdx, FxHashSet<String>> = FxHashMap::default();
+    let mut needed_names: FxHashMap<ModuleIdx, FxHashSet<SymbolId>> = FxHashMap::default();
+    let mut needed_exports: FxHashMap<ModuleIdx, FxHashSet<String>> = FxHashMap::default();
     let mut whole_modules: FxHashSet<ModuleIdx> = FxHashSet::default();
     let mut reasons: FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>> = FxHashMap::default();
     let mut symbol_kinds: FxHashMap<ModuleIdx, Option<FxHashMap<SymbolId, NeededKindFlags>>> =
         FxHashMap::default();
 
-    seed_entry_exports(entry, scan_result, &mut needed_names, &mut whole_modules, &mut reasons);
+    seed_entry_exports(
+        entry,
+        scan_result,
+        &mut needed_names,
+        &mut needed_exports,
+        &mut whole_modules,
+        &mut reasons,
+    );
     propagate_entry_retained_dependencies(
         entry,
         declaration_graphs.get(&entry.idx).map_or(&[], Vec::as_slice),
         scan_result,
         &mut needed_names,
+        &mut needed_exports,
         &mut whole_modules,
         &mut reasons,
     );
@@ -71,16 +79,23 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
     let mut changed = true;
     while changed {
         changed = false;
-        changed |= propagate_needed_names(&mut needed_names, &mut reasons, scan_result);
+        changed |= propagate_needed_names(
+            &mut needed_names,
+            &mut needed_exports,
+            &mut reasons,
+            scan_result,
+        );
 
         let current_needed = needed_names.clone();
+        let current_exports = needed_exports.clone();
         let current_whole = whole_modules.clone();
         let current_symbol_kinds = symbol_kinds.clone();
         let mut next_symbol_kinds: FxHashMap<
             ModuleIdx,
             Option<FxHashMap<SymbolId, NeededKindFlags>>,
         > = FxHashMap::default();
-        let mut name_additions: Vec<(ModuleIdx, String, NeededReason)> = Vec::new();
+        let mut symbol_additions: Vec<(ModuleIdx, SymbolId, NeededReason)> = Vec::new();
+        let mut export_additions: Vec<(ModuleIdx, String, NeededReason)> = Vec::new();
         let mut whole_additions: Vec<(ModuleIdx, NeededReason)> = Vec::new();
 
         for module in &scan_result.modules {
@@ -89,8 +104,9 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
             }
 
             let direct_needed = current_needed.get(&module.idx);
+            let direct_exports = current_exports.get(&module.idx);
             let is_whole = current_whole.contains(&module.idx) || module.has_augmentation;
-            if direct_needed.is_none() && !is_whole {
+            if direct_needed.is_none() && direct_exports.is_none() && !is_whole {
                 continue;
             }
 
@@ -108,12 +124,12 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
                 next_symbol_kinds.insert(module.idx, Some(expansion.needed_symbols.clone()));
             }
 
-            let before_names = current_needed.get(&module.idx);
-            for name in &expansion.expanded_names {
-                if before_names.is_none_or(|set| !set.contains(name.as_str())) {
-                    name_additions.push((
+            let before_symbols = current_needed.get(&module.idx);
+            for symbol_id in &expansion.expanded_symbols {
+                if before_symbols.is_none_or(|set| !set.contains(symbol_id)) {
+                    symbol_additions.push((
                         module.idx,
-                        name.clone(),
+                        *symbol_id,
                         NeededReason::SemanticDependency,
                     ));
                 }
@@ -122,7 +138,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
             for dep in expansion.cross_module_deps {
                 match dep.target_name {
                     Some(name) => {
-                        name_additions.push((dep.target_module_idx, name, dep.reason));
+                        export_additions.push((dep.target_module_idx, name, dep.reason));
                     }
                     None => whole_additions.push((dep.target_module_idx, dep.reason)),
                 }
@@ -130,7 +146,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
 
             for dep in expansion.inline_import_deps {
                 if let Some(name) = dep.target_name {
-                    name_additions.push((
+                    export_additions.push((
                         dep.target_module_idx,
                         name,
                         NeededReason::InlineImportReference,
@@ -148,6 +164,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
         for (module_idx, reason) in whole_additions {
             changed |= mark_module_whole_needed(
                 &mut needed_names,
+                &mut needed_exports,
                 &mut whole_modules,
                 &mut reasons,
                 module_idx,
@@ -156,23 +173,37 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
             );
         }
 
-        for (module_idx, name, reason) in name_additions {
-            changed |= add_needed_name(&mut needed_names, &mut reasons, module_idx, &name, reason);
+        for (module_idx, symbol_id, reason) in symbol_additions {
+            changed |= add_needed_symbol(
+                &mut needed_names,
+                &mut reasons,
+                scan_result,
+                module_idx,
+                symbol_id,
+                reason,
+            );
+        }
+
+        for (module_idx, name, reason) in export_additions {
+            changed |= add_needed_name(
+                &mut needed_names,
+                &mut needed_exports,
+                &mut reasons,
+                scan_result,
+                module_idx,
+                &name,
+                reason,
+            );
         }
     }
 
     let mut map: FxHashMap<ModuleIdx, Option<FxHashSet<SymbolId>>> = FxHashMap::default();
-    for (&module_idx, names) in &needed_names {
+    for (&module_idx, symbols) in &needed_names {
         if whole_modules.contains(&module_idx) || scan_result.modules[module_idx].has_augmentation {
             map.insert(module_idx, None);
             symbol_kinds.insert(module_idx, None);
         } else {
-            let module = &scan_result.modules[module_idx];
-            let symbols = names
-                .iter()
-                .filter_map(|name| module.scoping.get_root_binding(Ident::from(name.as_str())))
-                .collect();
-            map.insert(module_idx, Some(symbols));
+            map.insert(module_idx, Some(symbols.clone()));
             symbol_kinds.entry(module_idx).or_insert_with(|| Some(FxHashMap::default()));
         }
     }
@@ -183,7 +214,8 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
 fn seed_entry_exports(
     entry: &Module<'_>,
     scan_result: &ScanResult<'_>,
-    needed_names: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
+    needed_names: &mut FxHashMap<ModuleIdx, FxHashSet<SymbolId>>,
+    needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     whole_modules: &mut FxHashSet<ModuleIdx>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
 ) {
@@ -198,7 +230,9 @@ fn seed_entry_exports(
                 .unwrap_or_else(|| imported_name.clone());
             add_needed_name(
                 needed_names,
+                needed_exports,
                 reasons,
+                scan_result,
                 target_idx,
                 &name,
                 NeededReason::EntryNamedReexport,
@@ -209,12 +243,20 @@ fn seed_entry_exports(
     for star in &entry_info.star_reexports {
         if let Some(target_idx) = entry.resolve_internal_specifier(&star.specifier) {
             if star.alias.is_some() {
-                add_namespace_requirement(needed_names, reasons, target_idx, scan_result);
+                add_namespace_requirement(
+                    needed_names,
+                    needed_exports,
+                    reasons,
+                    target_idx,
+                    scan_result,
+                );
             } else {
                 for name in collect_all_exported_names(target_idx, scan_result) {
                     add_needed_name(
                         needed_names,
+                        needed_exports,
                         reasons,
+                        scan_result,
                         target_idx,
                         &name,
                         NeededReason::EntryStarReexport,
@@ -278,7 +320,9 @@ fn seed_entry_exports(
                             .unwrap_or(imported_name);
                         add_needed_name(
                             needed_names,
+                            needed_exports,
                             reasons,
+                            scan_result,
                             target_idx,
                             &local_name,
                             NeededReason::EntryNamedReexport,
@@ -287,6 +331,7 @@ fn seed_entry_exports(
                     ImportDeclarationSpecifier::ImportDefaultSpecifier(_) => {
                         mark_module_whole_needed(
                             needed_names,
+                            needed_exports,
                             whole_modules,
                             reasons,
                             target_idx,
@@ -295,7 +340,13 @@ fn seed_entry_exports(
                         );
                     }
                     ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {
-                        add_namespace_requirement(needed_names, reasons, target_idx, scan_result);
+                        add_namespace_requirement(
+                            needed_names,
+                            needed_exports,
+                            reasons,
+                            target_idx,
+                            scan_result,
+                        );
                     }
                 }
             }
@@ -307,7 +358,8 @@ fn propagate_entry_retained_dependencies(
     _entry: &Module<'_>,
     nodes: &[DeclarationNode],
     scan_result: &ScanResult<'_>,
-    needed_names: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
+    needed_names: &mut FxHashMap<ModuleIdx, FxHashSet<SymbolId>>,
+    needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     whole_modules: &mut FxHashSet<ModuleIdx>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
 ) {
@@ -315,11 +367,20 @@ fn propagate_entry_retained_dependencies(
         for dep in &node.cross_module_deps {
             match &dep.target_name {
                 Some(name) => {
-                    add_needed_name(needed_names, reasons, dep.target_module_idx, name, dep.reason);
+                    add_needed_name(
+                        needed_names,
+                        needed_exports,
+                        reasons,
+                        scan_result,
+                        dep.target_module_idx,
+                        name,
+                        dep.reason,
+                    );
                 }
                 None => {
                     mark_module_whole_needed(
                         needed_names,
+                        needed_exports,
                         whole_modules,
                         reasons,
                         dep.target_module_idx,
@@ -335,7 +396,9 @@ fn propagate_entry_retained_dependencies(
                 Some(name) => {
                     add_needed_name(
                         needed_names,
+                        needed_exports,
                         reasons,
+                        scan_result,
                         dep.target_module_idx,
                         name,
                         NeededReason::InlineImportReference,
@@ -344,6 +407,7 @@ fn propagate_entry_retained_dependencies(
                 None => {
                     mark_module_whole_needed(
                         needed_names,
+                        needed_exports,
                         whole_modules,
                         reasons,
                         dep.target_module_idx,
@@ -357,7 +421,8 @@ fn propagate_entry_retained_dependencies(
 }
 
 fn add_namespace_requirement(
-    needed_names: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
+    needed_names: &mut FxHashMap<ModuleIdx, FxHashSet<SymbolId>>,
+    needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
     target_idx: ModuleIdx,
     scan_result: &ScanResult<'_>,
@@ -366,7 +431,9 @@ fn add_namespace_requirement(
     for name in collect_all_exported_names(target_idx, scan_result) {
         changed |= add_needed_name(
             needed_names,
+            needed_exports,
             reasons,
+            scan_result,
             target_idx,
             &name,
             NeededReason::NamespaceRequirement,
@@ -376,7 +443,8 @@ fn add_namespace_requirement(
 }
 
 fn mark_module_whole_needed(
-    needed_names: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
+    needed_names: &mut FxHashMap<ModuleIdx, FxHashSet<SymbolId>>,
+    needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     whole_modules: &mut FxHashSet<ModuleIdx>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
     module_idx: ModuleIdx,
@@ -385,21 +453,65 @@ fn mark_module_whole_needed(
 ) -> bool {
     let mut changed = whole_modules.insert(module_idx);
     for name in collect_all_exported_names(module_idx, scan_result) {
-        changed |= add_needed_name(needed_names, reasons, module_idx, &name, reason);
+        changed |= add_needed_name(
+            needed_names,
+            needed_exports,
+            reasons,
+            scan_result,
+            module_idx,
+            &name,
+            reason,
+        );
     }
     changed
 }
 
 fn add_needed_name(
-    needed_names: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
+    needed_names: &mut FxHashMap<ModuleIdx, FxHashSet<SymbolId>>,
+    needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
+    scan_result: &ScanResult<'_>,
     module_idx: ModuleIdx,
     name: &str,
     reason: NeededReason,
 ) -> bool {
-    let inserted = needed_names.entry(module_idx).or_default().insert(name.to_string());
+    let inserted = needed_exports.entry(module_idx).or_default().insert(name.to_string());
     add_needed_reason(reasons, module_idx, name, reason);
+    let module = &scan_result.modules[module_idx];
+    let symbol_changed = resolve_export_symbol(module, name)
+        .or_else(|| module.scoping.get_root_binding(Ident::from(name)))
+        .is_some_and(|symbol_id| {
+            add_needed_symbol(needed_names, reasons, scan_result, module_idx, symbol_id, reason)
+        });
+    inserted || symbol_changed
+}
+
+fn add_needed_symbol(
+    needed_names: &mut FxHashMap<ModuleIdx, FxHashSet<SymbolId>>,
+    reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
+    scan_result: &ScanResult<'_>,
+    module_idx: ModuleIdx,
+    symbol_id: SymbolId,
+    reason: NeededReason,
+) -> bool {
+    let inserted = needed_names.entry(module_idx).or_default().insert(symbol_id);
+    if let Some(name) = root_symbol_name(&scan_result.modules[module_idx], symbol_id) {
+        add_needed_reason(reasons, module_idx, &name, reason);
+    }
     inserted
+}
+
+fn resolve_export_symbol(module: &Module<'_>, exported_name: &str) -> Option<SymbolId> {
+    let local_name = resolve_export_local_name(module, exported_name)?;
+    module.scoping.get_root_binding(Ident::from(local_name.as_str()))
+}
+
+fn root_symbol_name(module: &Module<'_>, symbol_id: SymbolId) -> Option<String> {
+    module
+        .scoping
+        .get_bindings(module.scoping.root_scope_id())
+        .into_iter()
+        .find_map(|(name, &candidate)| (candidate == symbol_id).then(|| name.to_string()))
 }
 
 fn add_needed_reason(
@@ -565,7 +677,6 @@ fn collect_declaration_nodes(
         }
 
         nodes.push(DeclarationNode {
-            declared_names,
             declared_root_symbols,
             local_symbol_deps,
             cross_module_deps,
@@ -580,31 +691,29 @@ fn collect_declaration_nodes(
 fn expand_module_graph(
     module: &Module<'_>,
     nodes: &[DeclarationNode],
-    direct_needed: Option<&FxHashSet<String>>,
+    direct_needed: Option<&FxHashSet<SymbolId>>,
     is_whole: bool,
     seeded_symbols: Option<&FxHashMap<SymbolId, NeededKindFlags>>,
 ) -> ModuleExpansion {
-    let mut expanded_names = direct_needed.cloned().unwrap_or_default();
+    let mut expanded_symbols = direct_needed.cloned().unwrap_or_default();
     let mut needed_symbols = seeded_symbols.cloned().unwrap_or_default();
     let mut cross_module_deps = Vec::new();
     let mut inline_import_deps = Vec::new();
     let mut activated = vec![false; nodes.len()];
 
     if !is_whole {
-        for name in direct_needed.into_iter().flatten() {
-            if let Some(symbol_id) = module.scoping.get_root_binding(Ident::from(name.as_str())) {
-                if needed_symbols.contains_key(&symbol_id) {
-                    continue;
-                }
-                let kinds = NeededKindFlags::ALL.intersection(NeededKindFlags::from_symbol_flags(
-                    module.scoping.symbol_flags(symbol_id),
-                ));
-                if !kinds.is_empty() {
-                    needed_symbols
-                        .entry(symbol_id)
-                        .and_modify(|existing| *existing = existing.union(kinds))
-                        .or_insert(kinds);
-                }
+        for symbol_id in direct_needed.into_iter().flatten() {
+            if needed_symbols.contains_key(symbol_id) {
+                continue;
+            }
+            let kinds = NeededKindFlags::ALL.intersection(NeededKindFlags::from_symbol_flags(
+                module.scoping.symbol_flags(*symbol_id),
+            ));
+            if !kinds.is_empty() {
+                needed_symbols
+                    .entry(*symbol_id)
+                    .and_modify(|existing| *existing = existing.union(kinds))
+                    .or_insert(kinds);
             }
         }
     }
@@ -627,7 +736,7 @@ fn expand_module_graph(
 
             if !activated[index] {
                 activated[index] = true;
-                expanded_names.extend(node.declared_names.iter().cloned());
+                expanded_symbols.extend(node.declared_root_symbols.keys().copied());
                 cross_module_deps.extend(node.cross_module_deps.iter().cloned());
                 inline_import_deps.extend(node.inline_import_deps.iter().cloned());
             }
@@ -649,27 +758,28 @@ fn expand_module_graph(
     }
 
     let root_scope_id = module.scoping.root_scope_id();
-    for (name, &symbol_id) in module.scoping.get_bindings(root_scope_id) {
+    for (_, &symbol_id) in module.scoping.get_bindings(root_scope_id) {
         if needed_symbols.contains_key(&symbol_id) && !declared_symbols.contains(&symbol_id) {
-            expanded_names.insert(name.to_string());
+            expanded_symbols.insert(symbol_id);
         }
     }
 
-    ModuleExpansion { expanded_names, needed_symbols, cross_module_deps, inline_import_deps }
+    ModuleExpansion { expanded_symbols, needed_symbols, cross_module_deps, inline_import_deps }
 }
 
 fn propagate_needed_names(
-    needed: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
+    needed: &mut FxHashMap<ModuleIdx, FxHashSet<SymbolId>>,
+    needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
     scan_result: &ScanResult<'_>,
 ) -> bool {
     use std::collections::VecDeque;
 
     let mut changed = false;
-    let mut queue: VecDeque<ModuleIdx> = needed.keys().copied().collect();
+    let mut queue: VecDeque<ModuleIdx> = needed_exports.keys().copied().collect();
 
     while let Some(module_idx) = queue.pop_front() {
-        let module_needed = match needed.get(&module_idx) {
+        let module_needed = match needed_exports.get(&module_idx) {
             Some(set) => set.clone(),
             None => continue,
         };
@@ -680,8 +790,18 @@ fn propagate_needed_names(
 
         let module = &scan_result.modules[module_idx];
         let info = &module.export_import_info;
-        let locally_declared: FxHashSet<&str> =
-            info.declared_export_names.iter().map(String::as_str).collect();
+        for name in &module_needed {
+            if let Some(symbol_id) = resolve_export_symbol(module, name) {
+                changed |= add_needed_symbol(
+                    needed,
+                    reasons,
+                    scan_result,
+                    module_idx,
+                    symbol_id,
+                    NeededReason::SemanticDependency,
+                );
+            }
+        }
 
         let star_sources: Vec<ModuleIdx> = info
             .star_reexports
@@ -708,7 +828,7 @@ fn propagate_needed_names(
 
         let mut unresolved: FxHashSet<String> = module_needed
             .iter()
-            .filter(|name| !locally_declared.contains(name.as_str()))
+            .filter(|name| resolve_export_symbol(module, name).is_none())
             .cloned()
             .collect();
 
@@ -735,17 +855,24 @@ fn propagate_needed_names(
                 unresolved.remove(exported);
             }
 
-            let entry = needed.entry(*sub_module_idx).or_default();
-            let before = entry.len();
-            entry.extend(matching);
-            if entry.len() > before {
-                changed = true;
-                queue.push_back(*sub_module_idx);
+            for local in matching {
+                if add_needed_name(
+                    needed,
+                    needed_exports,
+                    reasons,
+                    scan_result,
+                    *sub_module_idx,
+                    &local,
+                    NeededReason::PropagationNamedReexport,
+                ) {
+                    changed = true;
+                    queue.push_back(*sub_module_idx);
+                }
             }
         }
 
         for sub_module_idx in &star_sources {
-            let sub_exports = collect_exported_names_from_program(*sub_module_idx, scan_result);
+            let sub_exports = collect_public_exported_names(*sub_module_idx, scan_result);
             let matching: FxHashSet<String> =
                 unresolved.intersection(&sub_exports).cloned().collect();
             if matching.is_empty() {
@@ -762,12 +889,19 @@ fn propagate_needed_names(
                 unresolved.remove(name);
             }
 
-            let entry = needed.entry(*sub_module_idx).or_default();
-            let before = entry.len();
-            entry.extend(matching);
-            if entry.len() > before {
-                changed = true;
-                queue.push_back(*sub_module_idx);
+            for name in matching {
+                if add_needed_name(
+                    needed,
+                    needed_exports,
+                    reasons,
+                    scan_result,
+                    *sub_module_idx,
+                    &name,
+                    NeededReason::PropagationStarReexport,
+                ) {
+                    changed = true;
+                    queue.push_back(*sub_module_idx);
+                }
             }
         }
     }

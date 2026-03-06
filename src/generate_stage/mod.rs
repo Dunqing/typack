@@ -30,7 +30,9 @@ use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::helpers::collect_decl_names;
-use crate::link_stage::exports::{find_external_reexport_source, resolve_export_local_name};
+use crate::link_stage::exports::{
+    find_external_reexport_source, resolve_export_local_name, resolve_export_origin,
+};
 use crate::link_stage::{NeededKindFlags, RenamePlan, build_link_output};
 use crate::scan_stage::ScanResult;
 use crate::types::{Module, ModuleIdx};
@@ -697,14 +699,17 @@ impl<'a> GenerateStage<'a> {
                             let exported_name = spec.exported.name().to_string();
                             if let Some(source_module_idx) = internal_source_idx {
                                 let mut local_name = spec.local.name().to_string();
+                                let mut local_module_idx = source_module_idx;
                                 // Resolve through the source module's export aliases:
                                 // e.g. source has `export { createBaseVNode as createElementVNode }`,
                                 // map "createElementVNode" → "createBaseVNode"
-                                if let Some(resolved) = resolve_export_local_name(
-                                    &self.scan_result.modules[source_module_idx],
+                                if let Some((origin_module_idx, resolved)) = resolve_export_origin(
+                                    source_module_idx,
                                     &local_name,
+                                    self.scan_result,
                                 ) {
                                     local_name = resolved;
+                                    local_module_idx = origin_module_idx;
                                 } else if let Some((ext_source, imported_name)) =
                                     find_external_reexport_source(
                                         source_module_idx,
@@ -731,12 +736,12 @@ impl<'a> GenerateStage<'a> {
                                 }
                                 if local_name == "default"
                                     && let Some(name) =
-                                        shared.default_export_names.get(&source_module_idx)
+                                        shared.default_export_names.get(&local_module_idx)
                                 {
                                     local_name.clone_from(name);
                                 }
                                 if let Some(new_name) = shared.rename_plan.resolve_name(
-                                    &self.scan_result.modules[source_module_idx],
+                                    &self.scan_result.modules[local_module_idx],
                                     &local_name,
                                 ) {
                                     local_name = new_name.to_string();
