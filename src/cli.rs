@@ -33,7 +33,7 @@ struct Cli {
     #[bpaf(short('o'), long("outfile"), argument("PATH"), optional)]
     outfile: Option<PathBuf>,
 
-    /// Write per-entry outputs to directory (multiple entries)
+    /// Write outputs to directory (one per entry)
     #[bpaf(long("outdir"), argument("DIR"), optional)]
     outdir: Option<PathBuf>,
 
@@ -188,7 +188,9 @@ fn write_output_file(path: &Path, code: &str, map: Option<&oxc_sourcemap::Source
     });
 
     if let Some(map) = map {
-        let map_path = PathBuf::from(format!("{}.map", path.display()));
+        let mut map_path = path.as_os_str().to_owned();
+        map_path.push(".map");
+        let map_path = PathBuf::from(map_path);
         let json = map.to_json_string();
         fs::write(&map_path, json).unwrap_or_else(|e| {
             eprintln!("error: cannot write {}: {e}", map_path.display());
