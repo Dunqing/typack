@@ -34,9 +34,27 @@ pub fn build_link_output_for_entry(
     rename_plan: RenamePlan,
 ) -> LinkOutput {
     let mut needed_names_plan = build_needed_names(&scan_result.modules[entry_idx], scan_result);
-    // Keep the entry module whole (no tree-shaking within the entry itself).
-    needed_names_plan.map.insert(entry_idx, None);
-    needed_names_plan.symbol_kinds.insert(entry_idx, None);
+
+    // Compute only the symbols the entry actually needs (exports + augmentation
+    // refs + semantic deps) instead of keeping everything.
+    let entry = &scan_result.modules[entry_idx];
+    let (entry_needed, entry_kinds) = compute_entry_needed_symbols(entry, scan_result);
+
+    let map_entry =
+        needed_names_plan.map.entry(entry_idx).or_insert_with(|| Some(FxHashSet::default()));
+    if let Some(set) = map_entry {
+        set.extend(entry_needed);
+    }
+
+    let kinds_entry = needed_names_plan
+        .symbol_kinds
+        .entry(entry_idx)
+        .or_insert_with(|| Some(FxHashMap::default()));
+    if let Some(existing_kinds) = kinds_entry {
+        for (sym, kind) in entry_kinds {
+            existing_kinds.entry(sym).and_modify(|k| *k = k.union(kind)).or_insert(kind);
+        }
+    }
 
     let mut default_export_names: FxHashMap<ModuleIdx, String> = FxHashMap::default();
     for module in &scan_result.modules {
