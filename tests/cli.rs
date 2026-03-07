@@ -359,6 +359,40 @@ fn outdir_with_sourcemap() {
 }
 
 #[test]
+fn outdir_multi_entry_with_sourcemap() {
+    let project = TempProject::new("cli_outdir_multi_sourcemap");
+    project.write_file("a.d.ts", "export declare const a: number;\n");
+    project.write_file("b.d.ts", "export declare const b: string;\n");
+    let outdir = project.root.join("dist");
+
+    let entry_a = project.root.join("a.d.ts").to_string_lossy().to_string();
+    let entry_b = project.root.join("b.d.ts").to_string_lossy().to_string();
+    let output = bin()
+        .arg("--outdir")
+        .arg(&outdir)
+        .arg("--sourcemap")
+        .arg("--cwd")
+        .arg(&project.root)
+        .arg(&entry_a)
+        .arg(&entry_b)
+        .output()
+        .expect("failed to run binary");
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    // Each entry should have its own output and source map
+    for name in &["a", "b"] {
+        let out_path = outdir.join(format!("{name}.d.ts"));
+        let map_path = outdir.join(format!("{name}.d.ts.map"));
+        assert!(out_path.exists(), "{name}.d.ts should exist");
+        assert!(map_path.exists(), "{name}.d.ts.map should exist");
+
+        let map_content = fs::read_to_string(&map_path).expect("map file should be readable");
+        assert!(map_content.contains("\"mappings\""), "{name} source map should contain mappings");
+        assert!(map_content.contains("\"sources\""), "{name} source map should contain sources");
+    }
+}
+
+#[test]
 fn outfile_and_outdir_conflict() {
     let project = TempProject::new("cli_outfile_outdir_conflict");
 
