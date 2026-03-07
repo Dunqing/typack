@@ -154,11 +154,12 @@ const result = bundle({
   sourcemap: true,
 });
 
-console.log(result.code);
-
-if (result.map) {
-  // result.map is a JSON string
-  fs.writeFileSync("dist/index.d.ts.map", result.map);
+for (const output of result.outputs) {
+  console.log(output.code);
+  if (output.map) {
+    // output.map is a JSON string
+    fs.writeFileSync("dist/index.d.ts.map", output.map);
+  }
 }
 
 for (const warning of result.warnings) {
@@ -177,9 +178,13 @@ interface BundleDtsOptions {
   cjsDefault?: boolean;
 }
 
-interface BundleDtsResult {
+interface BundleDtsOutput {
   code: string;
   map?: string;
+}
+
+interface BundleDtsResult {
+  outputs: Array<BundleDtsOutput>;
   warnings: Array<BundleDtsDiagnostic>;
 }
 

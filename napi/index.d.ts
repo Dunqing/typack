@@ -18,7 +18,6 @@ export interface BundleDtsOptions {
 }
 
 export interface BundleDtsOutput {
-  entry: string;
   code: string;
   map?: string;
 }
