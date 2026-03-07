@@ -51,7 +51,6 @@ let result = TypackBundler::bundle(&TypackOptions {
 match result {
     Ok(bundle) => {
         for output in &bundle.outputs {
-            println!("// entry: {}", output.entry);
             println!("{}", output.code);
             if let Some(map) = &output.map {
                 // write source map to disk
@@ -91,11 +90,10 @@ match result {
 
 **`BundleOutput`**
 
-| Field   | Type                | Description                         |
-| ------- | ------------------- | ----------------------------------- |
-| `entry` | `String`            | The entry file path                 |
-| `code`  | `String`            | The bundled `.d.ts` output          |
-| `map`   | `Option<SourceMap>` | Source map (when `sourcemap: true`) |
+| Field  | Type                | Description                         |
+| ------ | ------------------- | ----------------------------------- |
+| `code` | `String`            | The bundled `.d.ts` output          |
+| `map`  | `Option<SourceMap>` | Source map (when `sourcemap: true`) |
 
 ## CLI
 
