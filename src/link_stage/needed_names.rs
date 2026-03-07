@@ -458,10 +458,18 @@ pub fn compute_entry_needed_symbols(
     entry: &Module<'_>,
     scan_result: &ScanResult<'_>,
 ) -> (FxHashSet<SymbolId>, FxHashMap<SymbolId, NeededKindFlags>) {
-    let exported_names = collect_all_exported_names(entry.idx, scan_result);
     let mut needed_symbols = FxHashSet::default();
-    for name in &exported_names {
-        if let Some(symbol_id) = entry.scoping.get_root_binding(Ident::from(name.as_str())) {
+    // Seed from locally-sourced exports only. Re-exports (`export { X } from
+    // "./mod"`) do not have a local binding in this module, so looking them up
+    // by name could accidentally retain an unrelated local declaration that
+    // happens to share the same name.
+    for export_entry in entry.export_import_info.named_exports.values() {
+        if matches!(export_entry.source, ExportSource::SourceReexport { .. }) {
+            continue;
+        }
+        if let Some(symbol_id) =
+            entry.scoping.get_root_binding(Ident::from(export_entry.local_name.as_str()))
+        {
             needed_symbols.insert(symbol_id);
         }
     }
