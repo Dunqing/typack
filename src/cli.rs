@@ -87,9 +87,9 @@ pub fn run_cli(args: &[String]) -> ! {
     }
 
     let result = TypackBundler::bundle(&TypackOptions {
-        input,
+        input: input.clone(),
         external: cli.external,
-        cwd,
+        cwd: cwd.clone(),
         sourcemap: cli.sourcemap,
         cjs_default: cli.cjs_default,
     });
