@@ -29,9 +29,13 @@ struct Cli {
     #[bpaf(long("cjs-default"), switch)]
     cjs_default: bool,
 
-    /// Write output to file instead of stdout
+    /// Write output to file instead of stdout (single entry only)
     #[bpaf(short('o'), long("outfile"), argument("PATH"), optional)]
     outfile: Option<PathBuf>,
+
+    /// Write per-entry outputs to directory (multiple entries)
+    #[bpaf(long("outdir"), argument("DIR"), optional)]
+    outdir: Option<PathBuf>,
 
     /// Entry .d.ts files to bundle
     #[bpaf(positional("ENTRY"), some("at least one entry file is required"))]
@@ -72,6 +76,16 @@ pub fn run_cli(args: &[String]) -> ! {
         })
         .collect();
 
+    // Validate option combinations
+    if input.len() > 1 && cli.outfile.is_some() {
+        eprintln!("error: --outfile cannot be used with multiple entries; use --outdir instead");
+        std::process::exit(1);
+    }
+    if cli.outfile.is_some() && cli.outdir.is_some() {
+        eprintln!("error: --outfile and --outdir cannot be used together");
+        std::process::exit(1);
+    }
+
     let result = TypackBundler::bundle(&TypackOptions {
         input,
         external: cli.external,
@@ -87,31 +101,35 @@ pub fn run_cli(args: &[String]) -> ! {
             }
 
             if let Some(outfile) = &cli.outfile {
-                if let Some(parent) = outfile.parent()
-                    && !parent.as_os_str().is_empty()
-                {
-                    fs::create_dir_all(parent).unwrap_or_else(|e| {
-                        eprintln!("error: cannot create directory {}: {e}", parent.display());
-                        std::process::exit(1);
-                    });
-                }
-                fs::write(outfile, &bundle.code).unwrap_or_else(|e| {
-                    eprintln!("error: cannot write {}: {e}", outfile.display());
+                // Single entry with --outfile
+                let output = &bundle.outputs[0];
+                write_output_file(outfile, &output.code, output.map.as_ref());
+            } else if let Some(outdir) = &cli.outdir {
+                // Multiple entries with --outdir
+                fs::create_dir_all(outdir).unwrap_or_else(|e| {
+                    eprintln!("error: cannot create directory {}: {e}", outdir.display());
                     std::process::exit(1);
                 });
-
-                if let Some(map) = &bundle.map {
-                    let map_path = PathBuf::from(format!("{}.map", outfile.display()));
-                    let json = map.to_json_string();
-                    fs::write(&map_path, json).unwrap_or_else(|e| {
-                        eprintln!("error: cannot write {}: {e}", map_path.display());
-                        std::process::exit(1);
-                    });
+                for output in &bundle.outputs {
+                    let entry_path = PathBuf::from(&output.entry);
+                    let stem = entry_path
+                        .file_stem()
+                        .unwrap_or_else(|| entry_path.as_os_str())
+                        .to_string_lossy();
+                    // Strip .d from stems like "index.d" (from "index.d.ts")
+                    let stem = stem.strip_suffix(".d").unwrap_or(&stem);
+                    let out_path = outdir.join(format!("{stem}.d.ts"));
+                    write_output_file(&out_path, &output.code, output.map.as_ref());
                 }
             } else {
-                println!("{}", bundle.code);
-                if bundle.map.is_some() {
-                    eprintln!("warning: --sourcemap without --outfile; source map not written");
+                // Print to stdout
+                for output in &bundle.outputs {
+                    println!("{}", output.code);
+                }
+                if bundle.outputs.iter().any(|o| o.map.is_some()) {
+                    eprintln!(
+                        "warning: --sourcemap without --outfile/--outdir; source map not written"
+                    );
                 }
             }
 
@@ -123,5 +141,29 @@ pub fn run_cli(args: &[String]) -> ! {
             }
             std::process::exit(1);
         }
+    }
+}
+
+fn write_output_file(path: &PathBuf, code: &str, map: Option<&oxc_sourcemap::SourceMap>) {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).unwrap_or_else(|e| {
+            eprintln!("error: cannot create directory {}: {e}", parent.display());
+            std::process::exit(1);
+        });
+    }
+    fs::write(path, code).unwrap_or_else(|e| {
+        eprintln!("error: cannot write {}: {e}", path.display());
+        std::process::exit(1);
+    });
+
+    if let Some(map) = map {
+        let map_path = PathBuf::from(format!("{}.map", path.display()));
+        let json = map.to_json_string();
+        fs::write(&map_path, json).unwrap_or_else(|e| {
+            eprintln!("error: cannot write {}: {e}", map_path.display());
+            std::process::exit(1);
+        });
     }
 }

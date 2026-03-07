@@ -48,7 +48,7 @@ fn conformance() {
         });
 
         let actual = match result {
-            Ok(bundle) => bundle.code,
+            Ok(bundle) => bundle.outputs[0].code.clone(),
             Err(diagnostics) => {
                 failed += 1;
                 let msgs: Vec<String> =

@@ -50,12 +50,15 @@ let result = TypackBundler::bundle(&TypackOptions {
 
 match result {
     Ok(bundle) => {
-        println!("{}", bundle.code);
-        if let Some(map) = bundle.map {
-            // write source map to disk
-            let _ = map;
+        for output in &bundle.outputs {
+            println!("// entry: {}", output.entry);
+            println!("{}", output.code);
+            if let Some(map) = &output.map {
+                // write source map to disk
+                let _ = map;
+            }
         }
-        for warning in bundle.warnings {
+        for warning in &bundle.warnings {
             eprintln!("warning: {warning}");
         }
     }
@@ -83,9 +86,16 @@ match result {
 
 | Field      | Type                 | Description                         |
 | ---------- | -------------------- | ----------------------------------- |
-| `code`     | `String`             | The bundled `.d.ts` output          |
-| `map`      | `Option<SourceMap>`  | Source map (when `sourcemap: true`) |
+| `outputs`  | `Vec<BundleOutput>`  | Per-entry bundled outputs           |
 | `warnings` | `Vec<OxcDiagnostic>` | Non-fatal warnings                  |
+
+**`BundleOutput`**
+
+| Field   | Type                | Description                         |
+| ------- | ------------------- | ----------------------------------- |
+| `entry` | `String`            | The entry file path                 |
+| `code`  | `String`            | The bundled `.d.ts` output          |
+| `map`   | `Option<SourceMap>` | Source map (when `sourcemap: true`) |
 
 ## CLI
 

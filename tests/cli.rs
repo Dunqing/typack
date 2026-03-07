@@ -131,7 +131,7 @@ fn sourcemap_without_outfile_warns() {
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("--sourcemap without --outfile"),
+        stderr.contains("--sourcemap without --outfile") || stderr.contains("--sourcemap without --outfile/--outdir"),
         "expected warning about sourcemap without outfile, got:\n{stderr}"
     );
 }

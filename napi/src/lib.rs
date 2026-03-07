@@ -24,9 +24,15 @@ pub struct BundleDtsDiagnostic {
 }
 
 #[napi(object)]
-pub struct BundleDtsResult {
+pub struct BundleDtsOutput {
+    pub entry: String,
     pub code: String,
     pub map: Option<String>,
+}
+
+#[napi(object)]
+pub struct BundleDtsResult {
+    pub outputs: Vec<BundleDtsOutput>,
     pub warnings: Vec<BundleDtsDiagnostic>,
 }
 
@@ -41,8 +47,15 @@ fn bundle_impl(options: BundleDtsOptions) -> Result<BundleDtsResult> {
 
     match result {
         Ok(bundle) => Ok(BundleDtsResult {
-            code: bundle.code,
-            map: bundle.map.map(|map| map.to_json_string()),
+            outputs: bundle
+                .outputs
+                .into_iter()
+                .map(|output| BundleDtsOutput {
+                    entry: output.entry,
+                    code: output.code,
+                    map: output.map.map(|map| map.to_json_string()),
+                })
+                .collect(),
             warnings: bundle
                 .warnings
                 .into_iter()
