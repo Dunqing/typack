@@ -12,6 +12,7 @@ mod rewriter;
 mod sourcemap;
 mod types;
 
+use std::collections::VecDeque;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
@@ -129,17 +130,13 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             helper_reserved_names: &helper_reserved_names,
         };
 
-        let mut module_outputs: Vec<ModuleOutput> = Vec::new();
+        let mut module_outputs: VecDeque<ModuleOutput> = VecDeque::new();
         for module_idx_usize in (0..self.scan_result.modules.len()).rev() {
             let module_idx = ModuleIdx::from_usize(module_idx_usize);
-            let is_entry = module_idx == self.entry_idx;
-            if let Some(module_output) =
-                self.generate_module_ast(module_idx, is_entry, &shared, &mut acc)
-            {
-                module_outputs.push(module_output);
+            if let Some(module_output) = self.generate_module_ast(module_idx, &shared, &mut acc) {
+                module_outputs.push_front(module_output);
             }
         }
-        module_outputs.sort_by_key(|m| m.module_idx);
 
         // Emit merged external imports before region markers
         let had_imports = !acc.imports.is_empty();
@@ -228,7 +225,6 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
     fn generate_module_ast(
         &mut self,
         module_idx: ModuleIdx,
-        is_entry: bool,
         shared: &GenerateSharedCtx<'_>,
         acc: &mut GenerateAcc,
     ) -> Option<ModuleOutput> {
@@ -261,7 +257,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                 // Collect local names from `export { X }` (no source) for non-entry
                 // modules. When X was imported from an external package, the import
                 // must be preserved even though X isn't used in local declarations.
-                if !is_entry
+                if !module.is_entry
                     && let Statement::ExportNamedDeclaration(decl) = stmt
                     && decl.source.is_none()
                     && decl.declaration.is_none()
@@ -353,21 +349,15 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         let mut transformed_body = ast.vec();
         let exports_start = acc.exports.len();
         let imports_start = acc.imports.len();
-        let mut input_body = {
-            let module = &self.scan_result.modules[module_idx];
-            module.program.body.clone_in_with_semantic_ids(self.allocator)
-        };
+        let module = &self.scan_result.modules[module_idx];
+        let mut input_body = { module.program.body.clone_in_with_semantic_ids(self.allocator) };
         for stmt in input_body.drain(..) {
             let module = &self.scan_result.modules[module_idx];
             self.process_statement_ast(
                 stmt,
                 ast,
                 &mut transformed_body,
-                ModuleTransformCtx {
-                    module,
-                    is_entry,
-                    needed_symbol_kinds: module_needed.as_ref(),
-                },
+                ModuleTransformCtx { module, needed_symbol_kinds: module_needed.as_ref() },
                 shared,
                 acc,
             );
@@ -621,7 +611,6 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         });
 
         Some(ModuleOutput {
-            module_idx,
             relative_path,
             is_ns_wrapped: ns_wrap.is_some(),
             namespace_wrapper,
@@ -639,7 +628,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         shared: &GenerateSharedCtx<'_>,
         acc: &mut GenerateAcc,
     ) {
-        let ModuleTransformCtx { module, is_entry, needed_symbol_kinds } = module_ctx;
+        let ModuleTransformCtx { module, needed_symbol_kinds } = module_ctx;
         match stmt {
             Statement::ExportNamedDeclaration(mut export_decl) => {
                 acc.has_any_export_statement = true;
@@ -654,7 +643,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                     // to `export` naturally attach to the unwrapped declaration.
                     decl.span_mut().start = export_decl.span.start;
 
-                    if is_entry {
+                    if module.is_entry {
                         let before_len = acc.exports.len();
                         collect_declaration_names(&decl, &mut acc.exports);
                         for exp in &mut acc.exports[before_len..] {
@@ -695,7 +684,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                             });
                         }
                     }
-                    if is_entry {
+                    if module.is_entry {
                         for spec in &export_decl.specifiers {
                             let exported_name = spec.exported.name().to_string();
                             if let Some(source_module_idx) = internal_source_idx {
@@ -763,7 +752,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                             }
                         }
                     }
-                } else if is_entry {
+                } else if module.is_entry {
                     for spec in &export_decl.specifiers {
                         let exported_name = spec.exported.name().to_string();
                         let spec_is_type =
@@ -818,7 +807,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                         };
                         func_decl.declare = true;
                         output.push(Statement::FunctionDeclaration(func_decl));
-                        if is_entry {
+                        if module.is_entry {
                             acc.exports.push(ExportedName {
                                 local: name,
                                 exported: "default".to_string(),
@@ -836,7 +825,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                         };
                         class_decl.declare = true;
                         output.push(Statement::ClassDeclaration(class_decl));
-                        if is_entry {
+                        if module.is_entry {
                             acc.exports.push(ExportedName {
                                 local: name,
                                 exported: "default".to_string(),
@@ -848,7 +837,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                         iface_decl.span.start = export_default.span.start;
                         let name = iface_decl.id.name.to_string();
                         output.push(Statement::TSInterfaceDeclaration(iface_decl));
-                        if is_entry {
+                        if module.is_entry {
                             acc.exports.push(ExportedName {
                                 local: name,
                                 exported: "default".to_string(),
@@ -857,7 +846,9 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                         }
                     }
                     kind => {
-                        if is_entry && let ExportDefaultDeclarationKind::Identifier(id) = kind {
+                        if module.is_entry
+                            && let ExportDefaultDeclarationKind::Identifier(id) = kind
+                        {
                             acc.exports.push(ExportedName {
                                 local: id.name.to_string(),
                                 exported: "default".to_string(),
@@ -874,7 +865,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                 if let Some(exported) = &export_all.exported {
                     let name = exported.name().to_string();
                     if let Some(source_module_idx) = internal_source_idx {
-                        if is_entry
+                        if module.is_entry
                             && let Some(wrap) = shared.namespace_wraps.get(&source_module_idx)
                         {
                             acc.exports.push(ExportedName {
@@ -894,7 +885,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                             side_effect_only: false,
                             from_reexport: true,
                         });
-                        if is_entry {
+                        if module.is_entry {
                             acc.exports.push(ExportedName {
                                 local: name.clone(),
                                 exported: name,
@@ -903,7 +894,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                         }
                     }
                 } else if let Some(source_module_idx) = internal_source_idx {
-                    if is_entry {
+                    if module.is_entry {
                         let before_len = acc.exports.len();
                         let mut visited = FxHashSet::default();
                         let mut star_external_imports = Vec::new();

@@ -65,7 +65,6 @@ pub(super) struct NamespaceWrapInfo {
 }
 
 pub(super) struct ModuleOutput {
-    pub(super) module_idx: ModuleIdx,
     pub(super) relative_path: String,
     pub(super) is_ns_wrapped: bool,
     pub(super) namespace_wrapper: Option<String>,
@@ -97,6 +96,5 @@ pub(super) struct GenerateAcc {
 #[derive(Clone, Copy)]
 pub(super) struct ModuleTransformCtx<'m, 'a> {
     pub(super) module: &'m Module<'a>,
-    pub(super) is_entry: bool,
     pub(super) needed_symbol_kinds: Option<&'m FxHashMap<SymbolId, NeededKindFlags>>,
 }
