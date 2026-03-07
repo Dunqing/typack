@@ -66,7 +66,7 @@ function openSourceMapViz() {
   const url = `https://evanw.github.io/source-map-visualization/#${utf8ToBase64(
     `${props.code.length}\0${props.code}${props.map.length}\0${props.map}`,
   )}`;
-  window.open(url, "_blank");
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 </script>
 

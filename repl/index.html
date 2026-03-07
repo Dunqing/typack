@@ -5,10 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>typack REPL</title>
     <script>
-      const p = localStorage.getItem("typack-theme");
-      if (p === "dark" || (p !== "light" && matchMedia("(prefers-color-scheme: dark)").matches)) {
-        document.documentElement.classList.add("dark");
-      }
+      try {
+        const p = localStorage.getItem("typack-theme");
+        if (p === "dark" || (p !== "light" && matchMedia("(prefers-color-scheme: dark)").matches)) {
+          document.documentElement.classList.add("dark");
+        }
+      } catch {}
     </script>
   </head>
   <body>

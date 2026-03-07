@@ -17,19 +17,23 @@ const { output, diagnostics, loading, ready, bundleTime, bundle } = useTypack();
 useTheme();
 useUrlState(files, activeFile);
 
-const isMobile = ref(false);
-const mobilePanel = ref<"editor" | "output">("editor");
 const MQ = "(max-width: 767px)";
+const isMobile = ref(window.matchMedia(MQ).matches);
+const mobilePanel = ref<"editor" | "output">("editor");
 
-function onMediaChange(e: MediaQueryListEvent | MediaQueryList) {
+let mql: MediaQueryList | null = null;
+
+function onMediaChange(e: MediaQueryListEvent) {
   isMobile.value = e.matches;
 }
 
 onMounted(() => {
-  const mql = window.matchMedia(MQ);
-  onMediaChange(mql);
+  mql = window.matchMedia(MQ);
   mql.addEventListener("change", onMediaChange);
-  onBeforeUnmount(() => mql.removeEventListener("change", onMediaChange));
+});
+
+onBeforeUnmount(() => {
+  mql?.removeEventListener("change", onMediaChange);
 });
 
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;

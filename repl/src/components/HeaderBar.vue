@@ -76,6 +76,7 @@ function reportBug() {
         class="flex cursor-pointer items-center opacity-70 transition-opacity hover:opacity-100"
         @click="toggle"
         :title="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
+        :aria-label="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
       >
         <!-- Sun icon (shown in dark mode) -->
         <svg

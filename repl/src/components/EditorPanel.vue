@@ -222,7 +222,7 @@ function finishRename(oldName: string) {
         <template v-if="editingTab === file.name">
           <input
             v-model="editInput"
-            class="w-30 border border-blue-500 bg-slate-200 px-1 py-px text-xs text-slate-900 outline-none dark:bg-neutral-700 dark:text-white"
+            class="w-32 border border-blue-500 bg-slate-200 px-1 py-px text-xs text-slate-900 outline-none dark:bg-neutral-700 dark:text-white"
             @blur="finishRename(file.name)"
             @keyup.enter="finishRename(file.name)"
             @keyup.escape="editingTab = null"
