@@ -113,17 +113,21 @@ pub fn run_cli(args: &[String]) -> ! {
                 });
                 for (entry, output) in options.input.iter().zip(&bundle.outputs) {
                     let entry_path = PathBuf::from(entry);
-                    // Preserve relative directory structure under outdir
+                    // Preserve relative directory structure under outdir;
+                    // fall back to just the filename if the entry is outside cwd
                     let relative = entry_path
                         .strip_prefix(&options.cwd)
-                        .unwrap_or(&entry_path);
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|_| {
+                            entry_path.file_name().map(PathBuf::from).unwrap_or(entry_path.clone())
+                        });
                     let stem = relative
                         .file_stem()
                         .unwrap_or_else(|| relative.as_os_str())
                         .to_string_lossy();
                     // Strip .d from stems like "index.d" (from "index.d.ts")
                     let stem = stem.strip_suffix(".d").unwrap_or(&stem);
-                    let out_path = if let Some(parent) = relative.parent() {
+                    let out_path = if let Some(parent) = relative.parent().filter(|p| !p.as_os_str().is_empty()) {
                         outdir.join(parent).join(format!("{stem}.d.ts"))
                     } else {
                         outdir.join(format!("{stem}.d.ts"))

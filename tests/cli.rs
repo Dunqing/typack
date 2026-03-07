@@ -308,6 +308,30 @@ fn outdir_preserves_relative_directory_structure() {
 }
 
 #[test]
+fn outdir_entry_outside_cwd_falls_back_to_filename() {
+    let project = TempProject::new("cli_outdir_outside_cwd");
+    let other = TempProject::new("cli_outdir_outside_other");
+    other.write_file("lib.d.ts", "export declare const x: number;\n");
+
+    let outdir = project.root.join("dist");
+    let entry = other.root.join("lib.d.ts").to_string_lossy().to_string();
+
+    let output = bin()
+        .arg("--outdir")
+        .arg(&outdir)
+        .arg("--cwd")
+        .arg(&project.root)
+        .arg(&entry)
+        .output()
+        .expect("failed to run binary");
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    // Should fall back to just the filename, not the full absolute path
+    let out_path = outdir.join("lib.d.ts");
+    assert!(out_path.exists(), "output should be at {}", out_path.display());
+}
+
+#[test]
 fn outdir_with_sourcemap() {
     let project = TempProject::new("cli_outdir_sourcemap");
     project.write_file("index.d.ts", "export declare function hello(): void;\n");
