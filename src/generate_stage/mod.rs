@@ -15,7 +15,7 @@ mod types;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
-use oxc_allocator::{Allocator, TakeIn};
+use oxc_allocator::{Allocator, CloneIn, TakeIn};
 use oxc_ast::AstBuilder;
 use oxc_ast::ast::{
     ExportDefaultDeclaration, ExportDefaultDeclarationKind, IdentifierReference, Statement,
@@ -33,7 +33,7 @@ use crate::helpers::collect_decl_names;
 use crate::link_stage::exports::{
     find_external_reexport_source, resolve_export_local_name, resolve_export_origin,
 };
-use crate::link_stage::{NeededKindFlags, RenamePlan, build_link_output};
+use crate::link_stage::{NeededKindFlags, RenamePlan, build_link_output_for_entry};
 use crate::scan_stage::ScanResult;
 use crate::types::{Module, ModuleIdx};
 use namespace::{
@@ -47,7 +47,8 @@ use types::*;
 
 /// Generate stage: produces the bundled `.d.ts` output.
 pub struct GenerateStage<'a> {
-    scan_result: &'a mut ScanResult<'a>,
+    scan_result: &'a ScanResult<'a>,
+    entry_idx: ModuleIdx,
     allocator: &'a Allocator,
     sourcemap: bool,
     cjs_default: bool,
@@ -63,20 +64,21 @@ pub struct GenerateOutput {
 
 impl<'a> GenerateStage<'a> {
     pub fn new(
-        scan_result: &'a mut ScanResult<'a>,
+        scan_result: &'a ScanResult<'a>,
+        entry_idx: ModuleIdx,
         allocator: &'a Allocator,
         sourcemap: bool,
         cjs_default: bool,
         cwd: &'a Path,
     ) -> Self {
-        Self { scan_result, allocator, sourcemap, cjs_default, cwd }
+        Self { scan_result, entry_idx, allocator, sourcemap, cjs_default, cwd }
     }
 
     /// Generate the bundled `.d.ts` output.
-    pub fn generate(&mut self) -> GenerateOutput {
+    pub fn generate(&self) -> GenerateOutput {
         let mut output = OutputAssembler::default();
         let mut acc = GenerateAcc::default();
-        let mut link_output = build_link_output(&*self.scan_result);
+        let mut link_output = build_link_output_for_entry(self.scan_result, self.entry_idx);
 
         // Collect and deduplicate reference directives from all modules
         let mut seen_set: FxHashSet<&str> = FxHashSet::default();
@@ -93,7 +95,8 @@ impl<'a> GenerateStage<'a> {
         }
 
         // Pre-scan all modules for namespace import patterns
-        let (mut namespace_wraps, namespace_aliases) = pre_scan_namespace_info(&*self.scan_result);
+        let (mut namespace_wraps, namespace_aliases) =
+            pre_scan_namespace_info(self.scan_result, self.entry_idx);
 
         // Keep namespace wrapper exports aligned with semantic renames.
         apply_namespace_wrap_renames(
@@ -125,7 +128,7 @@ impl<'a> GenerateStage<'a> {
         let mut module_outputs: Vec<ModuleOutput> = Vec::new();
         for module_idx_usize in (0..self.scan_result.modules.len()).rev() {
             let module_idx = ModuleIdx::from_usize(module_idx_usize);
-            let is_entry = self.scan_result.modules[module_idx].is_entry;
+            let is_entry = module_idx == self.entry_idx;
             if let Some(module_output) =
                 self.generate_module_ast(module_idx, is_entry, &shared, &mut acc)
             {
@@ -219,7 +222,7 @@ impl<'a> GenerateStage<'a> {
     }
 
     fn generate_module_ast(
-        &mut self,
+        &self,
         module_idx: ModuleIdx,
         is_entry: bool,
         shared: &GenerateSharedCtx<'_>,
@@ -350,11 +353,11 @@ impl<'a> GenerateStage<'a> {
         let mut transformed_body = ast.vec();
         let exports_start = acc.exports.len();
         let imports_start = acc.imports.len();
-        let mut input_body = {
-            let module = &mut self.scan_result.modules[module_idx];
-            module.program.body.take_in(self.allocator)
+        let input_body = {
+            let module = &self.scan_result.modules[module_idx];
+            module.program.body.clone_in(self.allocator)
         };
-        for stmt in input_body.drain(..) {
+        for stmt in input_body {
             let module = &self.scan_result.modules[module_idx];
             self.process_statement_ast(
                 stmt,
@@ -391,7 +394,7 @@ impl<'a> GenerateStage<'a> {
                 module,
                 imports: &mut acc.imports,
                 ns_name_map: &mut acc.ns_name_map,
-                scan_result: &*self.scan_result,
+                scan_result: self.scan_result,
                 ns_wrapper_output: &mut acc.ns_wrapper_blocks,
                 namespace_aliases: ns_aliases,
                 external_ns_info: &external_ns_info,
@@ -546,9 +549,9 @@ impl<'a> GenerateStage<'a> {
         };
 
         let (comments, hashbang, directives) = {
-            let module = &mut self.scan_result.modules[module_idx];
-            let taken_comments = module.program.comments.take_in(self.allocator);
-            let comments = ast.vec_from_iter(taken_comments.into_iter().filter(|comment| {
+            let module = &self.scan_result.modules[module_idx];
+            let cloned_comments = module.program.comments.clone_in(self.allocator);
+            let comments = ast.vec_from_iter(cloned_comments.into_iter().filter(|comment| {
                 let comment_text = comment.span.source_text(source_text).trim();
                 if reference_directive_set.contains(comment_text) {
                     return false;
@@ -557,8 +560,8 @@ impl<'a> GenerateStage<'a> {
                 !(comment_text.starts_with("//# sourceMappingURL=")
                     || comment_text.starts_with("//@ sourceMappingURL="))
             }));
-            let hashbang = module.program.hashbang.take();
-            let directives = module.program.directives.take_in(self.allocator);
+            let hashbang = module.program.hashbang.clone_in(self.allocator);
+            let directives = module.program.directives.clone_in(self.allocator);
             (comments, hashbang, directives)
         };
 
@@ -572,8 +575,7 @@ impl<'a> GenerateStage<'a> {
             transformed_body,
         );
 
-        // Take the input sourcemap after the mutable borrow of modules above
-        let input_sourcemap = self.scan_result.modules[module_idx].input_sourcemap.take();
+        let input_sourcemap = self.scan_result.modules[module_idx].input_sourcemap.as_ref();
 
         let mut codegen_options = CodegenOptions {
             indent_char: IndentChar::Space,
@@ -586,7 +588,7 @@ impl<'a> GenerateStage<'a> {
         let codegen_return = Codegen::new().with_options(codegen_options).build(&program);
         let code = codegen_return.code;
         let map = if self.sourcemap {
-            match (codegen_return.map, input_sourcemap.as_ref()) {
+            match (codegen_return.map, input_sourcemap) {
                 (Some(codegen_map), Some(input_map)) => {
                     let module_path = &self.scan_result.modules[module_idx].path;
                     Some(sourcemap::compose_sourcemaps(
@@ -1100,11 +1102,7 @@ fn apply_semantic_renames<'a>(
     renamed_symbols.extend(import_renames.iter().map(|(k, v)| (*k, v.clone())));
 
     if !renamed_symbols.is_empty() {
-        let mut renamer = SemanticRenamer {
-            allocator,
-            scoping: &module.scoping,
-            renamed_symbols: &renamed_symbols,
-        };
+        let mut renamer = SemanticRenamer::new(allocator, &module.scoping, &renamed_symbols);
         renamer.visit_statements(body);
     }
 }

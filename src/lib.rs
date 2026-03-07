@@ -52,38 +52,32 @@ pub struct TypackBundler;
 impl TypackBundler {
     /// Bundle `.d.ts` files, producing one output per entry point.
     ///
-    /// Returns `Ok` with per-entry outputs + warnings, or `Err` with fatal
-    /// diagnostics (e.g., parse errors, unresolvable imports).
+    /// All entries are scanned once into a shared module graph using a single
+    /// allocator.  Each entry then gets its own link + generate pass via
+    /// `clone_in`, so no AST is consumed and the scan result stays intact.
     ///
     /// # Errors
     ///
     /// Returns `Err` with a list of `OxcDiagnostic` when fatal errors occur,
     /// such as parse failures or unresolvable import specifiers.
     pub fn bundle(options: &TypackOptions) -> Result<BundleResult, Vec<OxcDiagnostic>> {
-        let mut all_outputs = Vec::new();
-        let mut all_warnings = Vec::new();
+        let allocator = Allocator::default();
+        let scan_result = ScanStage::new(options, &allocator).scan()?;
+        let mut all_warnings = scan_result.warnings.clone();
+        let mut all_outputs = Vec::with_capacity(options.input.len());
 
-        for entry in &options.input {
-            let allocator = Allocator::default();
-            let single_options = TypackOptions {
-                input: vec![entry.clone()],
-                external: options.external.clone(),
-                cwd: options.cwd.clone(),
-                sourcemap: options.sourcemap,
-                cjs_default: options.cjs_default,
-            };
-            let mut scan_result = ScanStage::new(&single_options, &allocator).scan()?;
-            let mut warnings = std::mem::take(&mut scan_result.warnings);
-            let mut generated = GenerateStage::new(
-                &mut scan_result,
+        for (i, entry) in options.input.iter().enumerate() {
+            let entry_idx = scan_result.entry_indices[i];
+            let generated = GenerateStage::new(
+                &scan_result,
+                entry_idx,
                 &allocator,
                 options.sourcemap,
                 options.cjs_default,
                 &options.cwd,
             )
             .generate();
-            warnings.append(&mut generated.warnings);
-            all_warnings.extend(warnings);
+            all_warnings.extend(generated.warnings);
             all_outputs.push(BundleOutput {
                 entry: entry.clone(),
                 code: generated.code,

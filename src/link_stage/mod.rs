@@ -18,13 +18,26 @@ pub use needed_names::build_needed_names;
 pub use rename::build_rename_plan;
 pub use resolved_exports::build_resolved_exports;
 pub use types::NeededKindFlags;
-pub use types::{LinkOutput, NeededNamesPlan, RenamePlan};
+pub use types::{LinkOutput, RenamePlan};
+#[cfg(test)]
+use types::NeededNamesPlan;
 
 use warnings::collect_link_warnings;
 
-pub fn build_link_output(scan_result: &ScanResult<'_>) -> LinkOutput {
+/// Build link output for a single entry point.
+///
+/// Computes needed names for just the specified entry, enabling per-entry
+/// output generation without re-scanning.
+pub fn build_link_output_for_entry(
+    scan_result: &ScanResult<'_>,
+    entry_idx: ModuleIdx,
+) -> LinkOutput {
     let rename_plan = build_rename_plan(scan_result);
-    let needed_names_plan = build_merged_needed_names(scan_result);
+
+    let mut needed_names_plan = build_needed_names(&scan_result.modules[entry_idx], scan_result);
+    // Keep the entry module whole (no tree-shaking within the entry itself).
+    needed_names_plan.map.insert(entry_idx, None);
+    needed_names_plan.symbol_kinds.insert(entry_idx, None);
 
     let mut default_export_names: FxHashMap<ModuleIdx, String> = FxHashMap::default();
     for module in &scan_result.modules {
@@ -39,6 +52,7 @@ pub fn build_link_output(scan_result: &ScanResult<'_>) -> LinkOutput {
     LinkOutput { rename_plan, needed_names_plan, default_export_names, warnings }
 }
 
+#[cfg(test)]
 fn build_merged_needed_names(scan_result: &ScanResult<'_>) -> NeededNamesPlan {
     debug_assert!(!scan_result.entry_indices.is_empty());
     let mut merged = NeededNamesPlan::default();
