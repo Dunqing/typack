@@ -15,7 +15,7 @@ mod types;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
-use oxc_allocator::{Allocator, TakeIn};
+use oxc_allocator::{Allocator, CloneIn};
 use oxc_ast::AstBuilder;
 use oxc_ast::ast::{
     ExportDefaultDeclaration, ExportDefaultDeclarationKind, IdentifierReference, Statement,
@@ -354,8 +354,8 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         let exports_start = acc.exports.len();
         let imports_start = acc.imports.len();
         let mut input_body = {
-            let module = &mut self.scan_result.modules[module_idx];
-            module.program.body.take_in(self.allocator)
+            let module = &self.scan_result.modules[module_idx];
+            module.program.body.clone_in_with_semantic_ids(self.allocator)
         };
         for stmt in input_body.drain(..) {
             let module = &self.scan_result.modules[module_idx];
@@ -550,8 +550,8 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
 
         let (comments, hashbang, directives) = {
             let module = &mut self.scan_result.modules[module_idx];
-            let taken_comments = module.program.comments.take_in(self.allocator);
-            let comments = ast.vec_from_iter(taken_comments.into_iter().filter(|comment| {
+            let raw_comments = module.program.comments.clone_in_with_semantic_ids(self.allocator);
+            let comments = ast.vec_from_iter(raw_comments.into_iter().filter(|comment| {
                 let comment_text = comment.span.source_text(source_text).trim();
                 if reference_directive_set.contains(comment_text) {
                     return false;
@@ -559,8 +559,8 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                 !(comment_text.starts_with("//# sourceMappingURL=")
                     || comment_text.starts_with("//@ sourceMappingURL="))
             }));
-            let hashbang = module.program.hashbang.take();
-            let directives = module.program.directives.take_in(self.allocator);
+            let hashbang = module.program.hashbang.clone_in_with_semantic_ids(self.allocator);
+            let directives = module.program.directives.clone_in_with_semantic_ids(self.allocator);
             (comments, hashbang, directives)
         };
 
@@ -574,7 +574,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             transformed_body,
         );
 
-        let input_sourcemap = self.scan_result.modules[module_idx].input_sourcemap.take();
+        let input_sourcemap = self.scan_result.modules[module_idx].input_sourcemap.clone();
 
         let mut codegen_options = CodegenOptions {
             indent_char: IndentChar::Space,
@@ -794,7 +794,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                     }
                 }
             }
-            Statement::ExportDefaultDeclaration(mut export_default) => {
+            Statement::ExportDefaultDeclaration(export_default) => {
                 acc.has_any_export_statement = true;
                 if let Some(needed) = needed_symbol_kinds
                     && !export_default_declaration_matches_needed_kinds(
@@ -805,7 +805,8 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                 {
                     return;
                 }
-                let declaration = export_default.declaration.take_in(self.allocator);
+                let declaration =
+                    export_default.declaration.clone_in_with_semantic_ids(self.allocator);
                 match declaration {
                     ExportDefaultDeclarationKind::FunctionDeclaration(mut func_decl) => {
                         func_decl.span.start = export_default.span.start;

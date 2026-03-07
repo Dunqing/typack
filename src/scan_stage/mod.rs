@@ -263,13 +263,14 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
             debug_assert_eq!(pushed_idx, new_idx);
         }
 
+        let mut seen_entries = FxHashSet::default();
         for old_entry_idx in entry_indices {
-            if let Some(new_entry_idx) = old_to_new.get(&old_entry_idx) {
-                new_entry_indices.push(*new_entry_idx);
+            if let Some(&new_entry_idx) = old_to_new.get(&old_entry_idx)
+                && seen_entries.insert(new_entry_idx)
+            {
+                new_entry_indices.push(new_entry_idx);
             }
         }
-        new_entry_indices.sort_unstable();
-        new_entry_indices.dedup();
 
         let entry_idx = *new_entry_indices
             .first()
