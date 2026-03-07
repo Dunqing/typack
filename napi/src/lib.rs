@@ -25,7 +25,6 @@ pub struct BundleDtsDiagnostic {
 
 #[napi(object)]
 pub struct BundleDtsOutput {
-    pub entry: String,
     pub code: String,
     pub map: Option<String>,
 }
@@ -51,7 +50,6 @@ fn bundle_impl(options: BundleDtsOptions) -> Result<BundleDtsResult> {
                 .outputs
                 .into_iter()
                 .map(|output| BundleDtsOutput {
-                    entry: output.entry,
                     code: output.code,
                     map: output.map.map(|map| map.to_json_string()),
                 })

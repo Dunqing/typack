@@ -1,7 +1,6 @@
 import { ref, shallowRef } from "vue";
 
 interface BundleOutput {
-  entry: string;
   code: string;
   map: string | null;
 }
@@ -22,7 +21,7 @@ interface TypackModule {
 }
 
 export function useTypack() {
-  const output = shallowRef<BundleOutput>({ entry: "", code: "", map: null });
+  const output = shallowRef<BundleOutput>({ code: "", map: null });
   const diagnostics = ref<Diagnostic[]>([]);
   const loading = ref(false);
   const ready = ref(false);
@@ -139,7 +138,7 @@ export function useTypack() {
       bundleTime.value = Math.round(end - start);
 
       const first = result.outputs[0];
-      output.value = { entry: first?.entry ?? "", code: first?.code ?? "", map: first?.map ?? null };
+      output.value = { code: first?.code ?? "", map: first?.map ?? null };
       diagnostics.value = result.warnings ?? [];
     } catch (err: any) {
       // NAPI errors encode diagnostics as JSON in the message
@@ -150,7 +149,7 @@ export function useTypack() {
         errors = [{ message: String(err.message ?? err), severity: "error" }];
       }
       diagnostics.value = errors;
-      output.value = { entry: "", code: "", map: null };
+      output.value = { code: "", map: null };
     } finally {
       loading.value = false;
     }
