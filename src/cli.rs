@@ -110,15 +110,23 @@ pub fn run_cli(args: &[String]) -> ! {
                     eprintln!("error: cannot create directory {}: {e}", outdir.display());
                     std::process::exit(1);
                 });
-                for (entry, output) in options.input.iter().zip(&bundle.outputs) {
+                for (entry, output) in input.iter().zip(&bundle.outputs) {
                     let entry_path = PathBuf::from(entry);
-                    let stem = entry_path
+                    // Preserve relative directory structure under outdir
+                    let relative = entry_path
+                        .strip_prefix(&cwd)
+                        .unwrap_or(&entry_path);
+                    let stem = relative
                         .file_stem()
-                        .unwrap_or_else(|| entry_path.as_os_str())
+                        .unwrap_or_else(|| relative.as_os_str())
                         .to_string_lossy();
                     // Strip .d from stems like "index.d" (from "index.d.ts")
                     let stem = stem.strip_suffix(".d").unwrap_or(&stem);
-                    let out_path = outdir.join(format!("{stem}.d.ts"));
+                    let out_path = if let Some(parent) = relative.parent() {
+                        outdir.join(parent).join(format!("{stem}.d.ts"))
+                    } else {
+                        outdir.join(format!("{stem}.d.ts"))
+                    };
                     write_output_file(&out_path, &output.code, output.map.as_ref());
                 }
             } else {
