@@ -11,8 +11,9 @@ import { useTheme } from "./composables/useTheme";
 import { useTypack } from "./composables/useTypack";
 import { useUrlState } from "./composables/useUrlState";
 
-const { files, activeFile, addFile, removeFile, renameFile, updateContent } = useFiles();
-const { output, diagnostics, loading, ready, bundleTime, bundle } = useTypack();
+const { files, activeFile, addFile, removeFile, renameFile, updateContent, toggleEntry } =
+  useFiles();
+const { outputs, entryNames, diagnostics, loading, ready, bundleTime, bundle } = useTypack();
 
 useTheme();
 useUrlState(files, activeFile);
@@ -48,7 +49,8 @@ watch(
       for (const f of files.value) {
         fileMap[f.name] = f.content;
       }
-      bundle(fileMap);
+      const entries = files.value.filter((f) => f.isEntry).map((f) => f.name);
+      bundle(fileMap, entries);
     }, 300);
   },
   { deep: true },
@@ -60,7 +62,8 @@ watch(ready, (isReady) => {
     for (const f of files.value) {
       fileMap[f.name] = f.content;
     }
-    bundle(fileMap);
+    const entries = files.value.filter((f) => f.isEntry).map((f) => f.name);
+    bundle(fileMap, entries);
   }
 });
 </script>
@@ -72,7 +75,8 @@ watch(ready, (isReady) => {
       :ready="ready"
       :bundle-time="bundleTime"
       :files="files"
-      :output="output.code"
+      :outputs="outputs"
+      :entry-names="entryNames"
     />
     <!-- Desktop: side-by-side splitpanes -->
     <Splitpanes v-if="!isMobile" class="default-theme flex-1 overflow-hidden">
@@ -85,10 +89,11 @@ watch(ready, (isReady) => {
           @add-file="addFile"
           @remove-file="removeFile"
           @rename-file="renameFile"
+          @toggle-entry="toggleEntry"
         />
       </Pane>
       <Pane :size="50" :min-size="20">
-        <OutputPanel :code="output.code" :map="output.map" :diagnostics="diagnostics" />
+        <OutputPanel :outputs="outputs" :entry-names="entryNames" :diagnostics="diagnostics" />
       </Pane>
     </Splitpanes>
 
@@ -131,11 +136,12 @@ watch(ready, (isReady) => {
           @add-file="addFile"
           @remove-file="removeFile"
           @rename-file="renameFile"
+          @toggle-entry="toggleEntry"
         />
         <OutputPanel
           v-show="mobilePanel === 'output'"
-          :code="output.code"
-          :map="output.map"
+          :outputs="outputs"
+          :entry-names="entryNames"
           :diagnostics="diagnostics"
           class="h-full"
         />

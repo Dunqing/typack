@@ -21,7 +21,8 @@ interface TypackModule {
 }
 
 export function useTypack() {
-  const output = shallowRef<BundleOutput>({ code: "", map: null });
+  const outputs = shallowRef<BundleOutput[]>([]);
+  const entryNames = ref<string[]>([]);
   const diagnostics = ref<Diagnostic[]>([]);
   const loading = ref(false);
   const ready = ref(false);
@@ -109,7 +110,7 @@ export function useTypack() {
 
   init();
 
-  function bundle(files: Record<string, string>) {
+  function bundle(files: Record<string, string>, entries: string[]) {
     if (!typackModule || !vol) return;
 
     loading.value = true;
@@ -125,20 +126,20 @@ export function useTypack() {
         vol.writeFileSync(`/src/${name}`, content, "utf8");
       }
 
-      const fileNames = Object.keys(files);
-      const entry = fileNames.includes("index.d.ts") ? "index.d.ts" : fileNames[0];
+      const resolvedEntries = entries.length > 0 ? entries : [Object.keys(files)[0]];
+      const input = resolvedEntries.map((e) => `/src/${e}`);
+      entryNames.value = resolvedEntries;
 
       const start = performance.now();
       const result = typackModule.bundle({
-        input: [`/src/${entry}`],
+        input,
         cwd: "/src",
         sourcemap: true,
       });
       const end = performance.now();
       bundleTime.value = Math.round(end - start);
 
-      const first = result.outputs[0];
-      output.value = { code: first?.code ?? "", map: first?.map ?? null };
+      outputs.value = result.outputs;
       diagnostics.value = result.warnings ?? [];
     } catch (err: any) {
       // NAPI errors encode diagnostics as JSON in the message
@@ -149,11 +150,11 @@ export function useTypack() {
         errors = [{ message: String(err.message ?? err), severity: "error" }];
       }
       diagnostics.value = errors;
-      output.value = { code: "", map: null };
+      outputs.value = [];
     } finally {
       loading.value = false;
     }
   }
 
-  return { output, diagnostics, loading, ready, bundleTime, bundle };
+  return { outputs, entryNames, diagnostics, loading, ready, bundleTime, bundle };
 }

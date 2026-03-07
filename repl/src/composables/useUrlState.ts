@@ -51,6 +51,18 @@ export function useUrlState(files: Ref<FileEntry[]>, activeFile: Ref<string>) {
       const json = decompress(hash);
       const state: SerializedState = JSON.parse(json);
       if (state.files?.length) {
+        // Ensure isEntry is defined on all files (backward compat with old URLs)
+        if (state.files.every((f) => f.isEntry === undefined)) {
+          const indexFile = state.files.find((f) => f.name === "index.d.ts");
+          if (indexFile) {
+            indexFile.isEntry = true;
+          } else {
+            state.files[0].isEntry = true;
+          }
+          for (const f of state.files) {
+            if (f.isEntry === undefined) f.isEntry = false;
+          }
+        }
         files.value = state.files;
         activeFile.value = state.active || state.files[0].name;
       }

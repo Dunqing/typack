@@ -18,6 +18,7 @@ const emit = defineEmits<{
   "add-file": [];
   "remove-file": [name: string];
   "rename-file": [payload: { oldName: string; newName: string }];
+  "toggle-entry": [name: string];
 }>();
 
 const editorContainer = ref<HTMLDivElement>();
@@ -205,48 +206,80 @@ function finishRename(oldName: string) {
 <template>
   <div class="flex h-full flex-col">
     <div
-      class="flex shrink-0 overflow-x-auto border-b border-slate-300 bg-slate-100 dark:border-neutral-700 dark:bg-neutral-900"
+      class="flex shrink-0 border-b border-slate-300 bg-slate-100 dark:border-neutral-700 dark:bg-neutral-900"
     >
-      <div
-        v-for="file in files"
-        :key="file.name"
-        class="flex cursor-pointer items-center gap-1.5 border-r border-slate-300 px-3 py-1.5 text-xs whitespace-nowrap dark:border-neutral-700"
-        :class="
-          file.name === activeFile
-            ? 'border-b-2 border-b-blue-500 bg-white text-slate-900 dark:bg-neutral-900 dark:text-white'
-            : 'bg-slate-200 text-slate-500 dark:bg-neutral-800 dark:text-neutral-500'
-        "
-        @click="emit('update:active-file', file.name)"
-        @dblclick="startRename(file.name)"
-      >
-        <template v-if="editingTab === file.name">
-          <input
-            v-model="editInput"
-            class="w-32 border border-blue-500 bg-slate-200 px-1 py-px text-xs text-slate-900 outline-none dark:bg-neutral-700 dark:text-white"
-            @blur="finishRename(file.name)"
-            @keyup.enter="finishRename(file.name)"
-            @keyup.escape="editingTab = null"
-            @click.stop
-            autofocus
-          />
-        </template>
-        <template v-else>
-          <span>{{ file.name }}</span>
-          <button
-            v-if="files.length > 1"
-            class="cursor-pointer border-none bg-transparent px-0.5 text-sm leading-none text-slate-400 hover:text-slate-900 dark:text-neutral-600 dark:hover:text-white"
-            @click.stop="emit('remove-file', file.name)"
-          >
-            &times;
-          </button>
-        </template>
+      <div class="flex min-w-0 flex-1 overflow-x-auto">
+        <div
+          v-for="file in files"
+          :key="file.name"
+          class="flex cursor-pointer items-center gap-1.5 border-r border-slate-300 px-3 py-1.5 text-xs whitespace-nowrap dark:border-neutral-700"
+          :class="
+            file.name === activeFile
+              ? 'border-b-2 border-b-blue-500 bg-white text-slate-900 dark:bg-neutral-900 dark:text-white'
+              : 'bg-slate-200 text-slate-500 dark:bg-neutral-800 dark:text-neutral-500'
+          "
+          @click="emit('update:active-file', file.name)"
+          @dblclick="startRename(file.name)"
+        >
+          <template v-if="editingTab === file.name">
+            <input
+              v-model="editInput"
+              class="w-32 border border-blue-500 bg-slate-200 px-1 py-px text-xs text-slate-900 outline-none dark:bg-neutral-700 dark:text-white"
+              @blur="finishRename(file.name)"
+              @keyup.enter="finishRename(file.name)"
+              @keyup.escape="editingTab = null"
+              @click.stop
+              autofocus
+            />
+          </template>
+          <template v-else>
+            <button
+              class="cursor-pointer border-none bg-transparent p-0 text-[10px] leading-none transition-colors"
+              :class="
+                file.isEntry
+                  ? 'text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300'
+                  : 'text-slate-400 hover:text-slate-600 dark:text-neutral-600 dark:hover:text-neutral-400'
+              "
+              :title="file.isEntry ? 'Entry file (click to unmark)' : 'Click to mark as entry'"
+              @click.stop="emit('toggle-entry', file.name)"
+            >
+              {{ file.isEntry ? "●" : "○" }}
+            </button>
+            <span>{{ file.name }}</span>
+            <button
+              v-if="files.length > 1"
+              class="cursor-pointer border-none bg-transparent px-0.5 text-sm leading-none text-slate-400 hover:text-slate-900 dark:text-neutral-600 dark:hover:text-white"
+              @click.stop="emit('remove-file', file.name)"
+            >
+              &times;
+            </button>
+          </template>
+        </div>
+        <button
+          class="cursor-pointer border-none bg-transparent px-3 py-1.5 text-base text-slate-400 hover:text-slate-900 dark:text-neutral-600 dark:hover:text-white"
+          @click="emit('add-file')"
+        >
+          +
+        </button>
       </div>
-      <button
-        class="cursor-pointer border-none bg-transparent px-3 py-1.5 text-base text-slate-400 hover:text-slate-900 dark:text-neutral-600 dark:hover:text-white"
-        @click="emit('add-file')"
-      >
-        +
-      </button>
+      <div class="group relative flex shrink-0 items-center px-2">
+        <span class="p-1 text-slate-400 dark:text-neutral-500">
+          <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor">
+            <path
+              fill-rule="evenodd"
+              d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Zm-7-4a1 1 0 1 1-2 0 1 1 0 0 1 2 0ZM9 9a.75.75 0 0 0 0 1.5h.253a.25.25 0 0 1 .244.304l-.459 2.066A1.75 1.75 0 0 0 10.747 15H11a.75.75 0 0 0 0-1.5h-.253a.25.25 0 0 1-.244-.304l.459-2.066A1.75 1.75 0 0 0 9.253 9H9Z"
+              clip-rule="evenodd"
+            />
+          </svg>
+        </span>
+        <div
+          class="pointer-events-none absolute top-full right-0 z-10 mt-1 w-56 rounded-md border border-slate-200 bg-white p-2.5 text-xs leading-relaxed text-slate-600 opacity-0 shadow-lg transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+        >
+          Click <span class="text-blue-500">●</span> /
+          <span class="text-slate-400 dark:text-neutral-500">○</span> to toggle entry points. Files
+          marked as entries (<span class="text-blue-500">●</span>) are bundled separately.
+        </div>
+      </div>
     </div>
     <div ref="editorContainer" class="flex-1" />
   </div>
