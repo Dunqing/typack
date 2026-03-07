@@ -1385,6 +1385,7 @@ dependencies = [
  "oxc_span",
  "oxc_syntax",
  "rustc-hash",
+ "serde_json",
 ]
 
 [[package]]

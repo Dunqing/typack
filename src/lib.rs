@@ -2,7 +2,7 @@
 //!
 //! Implements a three-stage pipeline (Scan, Link, Generate) that parses `.d.ts`
 //! files, resolves imports, applies tree-shaking and rename deconfliction, and
-//! emits a single bundled declaration file with optional source maps.
+//! emits one bundled declaration file per entry point with optional source maps.
 
 mod generate_stage;
 mod helpers;
@@ -20,15 +20,24 @@ use oxc_allocator::Allocator;
 use oxc_diagnostics::OxcDiagnostic;
 
 use crate::generate_stage::GenerateStage;
+use crate::link_stage::build_rename_plan;
 use crate::scan_stage::ScanStage;
 
-/// Result of bundling `.d.ts` files.
-pub struct BundleResult {
+/// A single bundled output for one entry point.
+pub struct BundleOutput {
     /// The bundled `.d.ts` output code.
     pub code: String,
     /// Source map mapping bundled output back to original `.d.ts` sources.
     /// Only present when `options.sourcemap` is true.
     pub map: Option<oxc_sourcemap::SourceMap>,
+}
+
+/// Result of bundling `.d.ts` files.
+///
+/// Contains one [`BundleOutput`] per entry point.
+pub struct BundleResult {
+    /// Per-entry bundled output.
+    pub output: Vec<BundleOutput>,
     /// Non-fatal warnings (e.g., unused exports, suspicious patterns).
     pub warnings: Vec<OxcDiagnostic>,
 }
@@ -40,10 +49,11 @@ pub struct BundleResult {
 pub struct TypackBundler;
 
 impl TypackBundler {
-    /// Bundle `.d.ts` files into a single output.
+    /// Bundle `.d.ts` files, producing one output per entry point.
     ///
-    /// Returns `Ok` with code + warnings, or `Err` with fatal diagnostics
-    /// (e.g., parse errors, unresolvable imports).
+    /// All entries are scanned once into a shared module graph using a single
+    /// allocator.  Each entry then gets its own link + generate pass that clones
+    /// the required AST structures from the shared scan result.
     ///
     /// # Errors
     ///
@@ -52,16 +62,28 @@ impl TypackBundler {
     pub fn bundle(options: &TypackOptions) -> Result<BundleResult, Vec<OxcDiagnostic>> {
         let allocator = Allocator::default();
         let mut scan_result = ScanStage::new(options, &allocator).scan()?;
-        let mut warnings = std::mem::take(&mut scan_result.warnings);
-        let mut generated = GenerateStage::new(
-            &mut scan_result,
-            &allocator,
-            options.sourcemap,
-            options.cjs_default,
-            &options.cwd,
-        )
-        .generate();
-        warnings.append(&mut generated.warnings);
-        Ok(BundleResult { code: generated.code, map: generated.map, warnings })
+        let mut all_warnings = std::mem::take(&mut scan_result.warnings);
+        let mut all_outputs = Vec::with_capacity(options.input.len());
+        let entry_indices = scan_result.entry_indices.clone();
+        let rename_plan = build_rename_plan(&scan_result);
+
+        for &entry_idx in &entry_indices {
+            let generated = {
+                let mut stage = GenerateStage::new(
+                    &mut scan_result,
+                    entry_idx,
+                    &allocator,
+                    options.sourcemap,
+                    options.cjs_default,
+                    &options.cwd,
+                    rename_plan.clone(),
+                );
+                stage.generate()
+            };
+            all_warnings.extend(generated.warnings);
+            all_outputs.push(BundleOutput { code: generated.code, map: generated.map });
+        }
+
+        Ok(BundleResult { output: all_outputs, warnings: all_warnings })
     }
 }

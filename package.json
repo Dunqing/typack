@@ -4,7 +4,10 @@
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "prepare": "husky",
-    "release": "bumpp --tag 'napi-v%s' --commit 'release: napi v%s' napi/package.json"
+    "release": "bumpp --tag 'napi-v%s' --commit 'release: napi v%s' napi/package.json",
+    "dev:napi": "pnpm --filter typack run build-wasm && cp napi/typack.wasm repl/public/wasm/typack.wasm",
+    "dev:vite": "pnpm --filter @typack/repl run dev",
+    "repl:dev": "pnpm run dev:napi && (cargo watch -w src -w napi/src -s 'pnpm run dev:napi' & pnpm run dev:vite)"
   },
   "devDependencies": {
     "bumpp": "^10.4.1",

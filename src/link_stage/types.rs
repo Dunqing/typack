@@ -10,7 +10,7 @@ use crate::types::{Module, ModuleIdx};
 ///
 /// When multiple modules declare names that collide, the link stage builds a rename
 /// plan mapping old names to conflict-free alternatives (e.g. `Foo` → `Foo$1`).
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct RenamePlan {
     /// Renames keyed by (module, symbol). Uses `SymbolId` for precise renaming
     /// that respects scoping and avoids false matches.
@@ -85,6 +85,7 @@ pub struct NeededNamesPlan {
     pub symbol_kinds: FxHashMap<ModuleIdx, Option<FxHashMap<SymbolId, NeededKindFlags>>>,
     /// Diagnostic info: why each name was determined to be needed (for testing/debugging).
     /// Only read in tests via `reasons_for()`.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub reasons: FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
 }
 

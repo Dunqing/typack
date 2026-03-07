@@ -3,16 +3,19 @@ import { ref, type Ref } from "vue";
 export interface FileEntry {
   name: string;
   content: string;
+  isEntry: boolean;
 }
 
 const DEFAULT_FILES: FileEntry[] = [
   {
     name: "index.d.ts",
     content: `import { add } from './utils';\n\nexport declare function greet(name: string): string;\nexport { add };\n`,
+    isEntry: true,
   },
   {
     name: "utils.d.ts",
     content: `export declare function add(a: number, b: number): number;\nexport declare function subtract(a: number, b: number): number;\n`,
+    isEntry: false,
   },
 ];
 
@@ -27,7 +30,7 @@ export function useFiles(initial?: FileEntry[]) {
       i++;
       name = `file${i}.d.ts`;
     }
-    files.value.push({ name, content: "" });
+    files.value.push({ name, content: "", isEntry: false });
     activeFile.value = name;
   }
 
@@ -56,5 +59,13 @@ export function useFiles(initial?: FileEntry[]) {
     if (file) file.content = content;
   }
 
-  return { files, activeFile, addFile, removeFile, renameFile, updateContent };
+  function toggleEntry(name: string) {
+    const file = files.value.find((f) => f.name === name);
+    if (!file) return;
+    // Prevent turning off the last entry
+    if (file.isEntry && files.value.filter((f) => f.isEntry).length <= 1) return;
+    file.isEntry = !file.isEntry;
+  }
+
+  return { files, activeFile, addFile, removeFile, renameFile, updateContent, toggleEntry };
 }

@@ -70,11 +70,16 @@ fn real_world() {
                     continue;
                 }
             };
-            let actual = bundle.code;
+            let output = bundle
+                .output
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("{fixture_name}: should have at least one output"));
+            let actual = output.code;
 
             // Validate source map
             let map =
-                bundle.map.unwrap_or_else(|| panic!("{fixture_name}: sourcemap should be present"));
+                output.map.unwrap_or_else(|| panic!("{fixture_name}: sourcemap should be present"));
             if let Err(msg) = validate_sourcemap(&fixture_name, &actual, &map) {
                 failed += 1;
                 failures.push(msg);

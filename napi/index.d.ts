@@ -17,8 +17,12 @@ export interface BundleDtsOptions {
   cjsDefault?: boolean;
 }
 
-export interface BundleDtsResult {
+export interface BundleDtsOutput {
   code: string;
   map?: string;
+}
+
+export interface BundleDtsResult {
+  output: Array<BundleDtsOutput>;
   warnings: Array<BundleDtsDiagnostic>;
 }

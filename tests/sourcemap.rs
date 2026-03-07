@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use typack::{TypackBundler, TypackOptions};
 
+mod common;
+
 fn bundle_fixture_with_sourcemap(fixture: &str) -> (String, oxc_sourcemap::SourceMap) {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let tests_dir = crate_dir.join("tests");
@@ -20,8 +22,9 @@ fn bundle_fixture_with_sourcemap(fixture: &str) -> (String, oxc_sourcemap::Sourc
     })
     .unwrap_or_else(|diagnostics| panic!("bundle failed: {diagnostics:?}"));
 
-    let map = result.map.expect("sourcemap should be present when `sourcemap: true`");
-    (result.code, map)
+    let output = result.output.into_iter().next().expect("should have at least one output");
+    let map = output.map.expect("sourcemap should be present when `sourcemap: true`");
+    (output.code, map)
 }
 
 fn find_generated_position(code: &str, needle: &str) -> (u32, u32) {

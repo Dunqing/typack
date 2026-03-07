@@ -265,8 +265,9 @@ pub(super) fn deconflict_namespace_wrap_names(
 /// - `namespace_aliases`: `import * as X` aliases in the entry (local name → module idx)
 pub(super) fn pre_scan_namespace_info(
     scan_result: &ScanResult<'_>,
+    entry_idx: ModuleIdx,
 ) -> (FxHashMap<ModuleIdx, NamespaceWrapInfo>, FxHashMap<SymbolId, ModuleIdx>) {
-    let entry = &scan_result.modules[scan_result.entry_idx];
+    let entry = &scan_result.modules[entry_idx];
 
     let mut namespace_wraps: FxHashMap<ModuleIdx, NamespaceWrapInfo> = FxHashMap::default();
     // Entry-level namespace aliases: `import * as X` SymbolId → source module idx
@@ -289,7 +290,7 @@ pub(super) fn pre_scan_namespace_info(
                         && let Some(symbol_id) = ns.local.symbol_id.get()
                     {
                         all_module_aliases.insert((module.idx, symbol_id), target_idx);
-                        if module.is_entry {
+                        if module.idx == entry_idx {
                             namespace_aliases.insert(symbol_id, target_idx);
                         }
                     }

@@ -15,7 +15,7 @@ fn bundle(
         cwd: project.root.clone(),
         ..Default::default()
     })
-    .map(|result| result.code)
+    .map(|result| result.output[0].code.clone())
 }
 
 #[test]

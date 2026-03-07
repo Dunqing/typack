@@ -51,6 +51,29 @@ export function useUrlState(files: Ref<FileEntry[]>, activeFile: Ref<string>) {
       const json = decompress(hash);
       const state: SerializedState = JSON.parse(json);
       if (state.files?.length) {
+        // Ensure isEntry is defined on all files (backward compat with old URLs)
+        const allIsEntryUndefined = state.files.every((f) => f.isEntry === undefined);
+        if (allIsEntryUndefined) {
+          const indexFile = state.files.find((f) => f.name === "index.d.ts");
+          if (indexFile) {
+            indexFile.isEntry = true;
+          } else {
+            state.files[0].isEntry = true;
+          }
+        }
+        // Normalize any remaining undefined isEntry flags to false
+        for (const f of state.files) {
+          if (f.isEntry === undefined) f.isEntry = false;
+        }
+        // Ensure at least one file is marked as an entry point
+        if (!state.files.some((f) => f.isEntry)) {
+          const indexFile = state.files.find((f) => f.name === "index.d.ts");
+          if (indexFile) {
+            indexFile.isEntry = true;
+          } else {
+            state.files[0].isEntry = true;
+          }
+        }
         files.value = state.files;
         activeFile.value = state.active || state.files[0].name;
       }

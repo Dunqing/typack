@@ -1,18 +1,34 @@
 <script setup lang="ts">
 import loader from "@monaco-editor/loader";
-import { ref, watch, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 
 import { useTheme } from "../composables/useTheme";
+import type { BundleOutput } from "../types";
 
 const { monacoTheme } = useTheme();
 
 const props = defineProps<{
-  code: string;
-  map: string | null;
+  output: BundleOutput[];
+  entryNames: string[];
   diagnostics: Array<{ message: string; severity: string }>;
 }>();
 
 const activeTab = ref<"output" | "diagnostics">("output");
+const activeOutputIdx = ref(0);
+
+const currentOutput = computed(() => props.output[activeOutputIdx.value]);
+const currentCode = computed(() => currentOutput.value?.code ?? "");
+const currentMap = computed(() => currentOutput.value?.map ?? null);
+
+watch(
+  () => props.output.length,
+  (len) => {
+    if (activeOutputIdx.value >= len) {
+      activeOutputIdx.value = Math.max(0, len - 1);
+    }
+  },
+);
+
 const editorContainer = ref<HTMLDivElement>();
 let editor: any = null;
 let monaco: any = null;
@@ -21,7 +37,7 @@ onMounted(async () => {
   monaco = await loader.init();
   if (!editorContainer.value) return;
   editor = monaco.editor.create(editorContainer.value, {
-    value: props.code,
+    value: currentCode.value,
     language: "typescript",
     theme: monacoTheme.value,
     minimap: { enabled: false },
@@ -42,14 +58,11 @@ watch(monacoTheme, (theme) => {
   monaco?.editor.setTheme(theme);
 });
 
-watch(
-  () => props.code,
-  (val) => {
-    if (editor && editor.getValue() !== val) {
-      editor.setValue(val);
-    }
-  },
-);
+watch(currentCode, (val) => {
+  if (editor && editor.getValue() !== val) {
+    editor.setValue(val);
+  }
+});
 
 function utf8ToBase64(input: string): string {
   const bytes = new TextEncoder().encode(input);
@@ -62,9 +75,9 @@ function utf8ToBase64(input: string): string {
 }
 
 function openSourceMapViz() {
-  if (!props.map || !props.code) return;
+  if (!currentMap.value || !currentCode.value) return;
   const url = `https://evanw.github.io/source-map-visualization/#${utf8ToBase64(
-    `${props.code.length}\0${props.code}${props.map.length}\0${props.map}`,
+    `${currentCode.value.length}\0${currentCode.value}${currentMap.value.length}\0${currentMap.value}`,
   )}`;
   window.open(url, "_blank", "noopener,noreferrer");
 }
@@ -72,6 +85,24 @@ function openSourceMapViz() {
 
 <template>
   <div class="flex h-full flex-col">
+    <div
+      v-if="output.length > 1"
+      class="flex shrink-0 overflow-x-auto border-b border-slate-300 bg-slate-100 dark:border-neutral-700 dark:bg-neutral-900"
+    >
+      <button
+        v-for="(_, idx) in output"
+        :key="idx"
+        class="cursor-pointer border-r border-none border-slate-300 bg-transparent px-3 py-1.5 text-xs whitespace-nowrap transition-colors dark:border-neutral-700"
+        :class="
+          idx === activeOutputIdx
+            ? 'border-b-2 border-b-blue-500 text-slate-900 dark:text-white'
+            : 'text-slate-500 hover:text-slate-700 dark:text-neutral-500 dark:hover:text-neutral-300'
+        "
+        @click="activeOutputIdx = idx"
+      >
+        output-{{ entryNames[idx] ?? `${idx + 1}.d.ts` }}
+      </button>
+    </div>
     <div
       class="flex shrink-0 border-b border-slate-300 bg-slate-100 dark:border-neutral-700 dark:bg-neutral-900"
     >
@@ -104,7 +135,7 @@ function openSourceMapViz() {
         </span>
       </button>
       <button
-        v-if="map"
+        v-if="currentMap"
         class="flex cursor-pointer items-center gap-1.5 border-none bg-transparent px-3 py-1.5 text-xs text-slate-500 transition-colors hover:text-slate-700 dark:text-neutral-500 dark:hover:text-neutral-300"
         @click="openSourceMapViz"
       >

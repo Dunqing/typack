@@ -47,6 +47,16 @@ pub(super) struct SemanticRenamer<'a, 's> {
     pub renamed_symbols: &'s FxHashMap<oxc_syntax::symbol::SymbolId, String>,
 }
 
+impl<'a, 's> SemanticRenamer<'a, 's> {
+    pub fn new(
+        allocator: &'a oxc_allocator::Allocator,
+        scoping: &'s Scoping,
+        renamed_symbols: &'s FxHashMap<oxc_syntax::symbol::SymbolId, String>,
+    ) -> Self {
+        Self { allocator, scoping, renamed_symbols }
+    }
+}
+
 impl<'a> VisitMut<'a> for SemanticRenamer<'a, '_> {
     fn visit_binding_identifier(&mut self, ident: &mut oxc_ast::ast::BindingIdentifier<'a>) {
         if let Some(symbol_id) = ident.symbol_id.get()
@@ -57,8 +67,8 @@ impl<'a> VisitMut<'a> for SemanticRenamer<'a, '_> {
     }
 
     fn visit_identifier_reference(&mut self, ident: &mut oxc_ast::ast::IdentifierReference<'a>) {
-        if let Some(reference_id) = ident.reference_id.get()
-            && let Some(symbol_id) = self.scoping.get_reference(reference_id).symbol_id()
+        if let Some(ref_id) = ident.reference_id.get()
+            && let Some(symbol_id) = self.scoping.get_reference(ref_id).symbol_id()
             && let Some(new_name) = self.renamed_symbols.get(&symbol_id)
         {
             ident.name = Ident::from_in(new_name.as_str(), self.allocator);
@@ -420,8 +430,7 @@ fn resolve_type_name_root_symbol(
 ) -> Option<SymbolId> {
     match type_name {
         TSTypeName::IdentifierReference(ident) => {
-            let ref_id = ident.reference_id.get()?;
-            scoping.get_reference(ref_id).symbol_id()
+            ident.reference_id.get().and_then(|r| scoping.get_reference(r).symbol_id())
         }
         TSTypeName::QualifiedName(qualified) => {
             resolve_type_name_root_symbol(&qualified.left, scoping)
@@ -433,8 +442,7 @@ fn resolve_type_name_root_symbol(
 fn resolve_expression_root_symbol(expr: &Expression<'_>, scoping: &Scoping) -> Option<SymbolId> {
     match expr {
         Expression::Identifier(ident) => {
-            let ref_id = ident.reference_id.get()?;
-            scoping.get_reference(ref_id).symbol_id()
+            ident.reference_id.get().and_then(|r| scoping.get_reference(r).symbol_id())
         }
         Expression::StaticMemberExpression(member) => {
             resolve_expression_root_symbol(&member.object, scoping)

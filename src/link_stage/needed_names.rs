@@ -111,7 +111,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
         let mut whole_additions: Vec<(ModuleIdx, NeededReason)> = Vec::new();
 
         for module in &scan_result.modules {
-            if module.is_entry {
+            if module.idx == entry.idx {
                 continue;
             }
 

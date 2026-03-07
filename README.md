@@ -50,12 +50,14 @@ let result = TypackBundler::bundle(&TypackOptions {
 
 match result {
     Ok(bundle) => {
-        println!("{}", bundle.code);
-        if let Some(map) = bundle.map {
-            // write source map to disk
-            let _ = map;
+        for output in &bundle.output {
+            println!("{}", output.code);
+            if let Some(map) = &output.map {
+                // write source map to disk
+                let _ = map;
+            }
         }
-        for warning in bundle.warnings {
+        for warning in &bundle.warnings {
             eprintln!("warning: {warning}");
         }
     }
@@ -81,11 +83,17 @@ match result {
 
 **`BundleResult`**
 
-| Field      | Type                 | Description                         |
-| ---------- | -------------------- | ----------------------------------- |
-| `code`     | `String`             | The bundled `.d.ts` output          |
-| `map`      | `Option<SourceMap>`  | Source map (when `sourcemap: true`) |
-| `warnings` | `Vec<OxcDiagnostic>` | Non-fatal warnings                  |
+| Field      | Type                 | Description              |
+| ---------- | -------------------- | ------------------------ |
+| `output`   | `Vec<BundleOutput>`  | Per-entry bundled output |
+| `warnings` | `Vec<OxcDiagnostic>` | Non-fatal warnings       |
+
+**`BundleOutput`**
+
+| Field  | Type                | Description                         |
+| ------ | ------------------- | ----------------------------------- |
+| `code` | `String`            | The bundled `.d.ts` output          |
+| `map`  | `Option<SourceMap>` | Source map (when `sourcemap: true`) |
 
 ## CLI
 
@@ -103,7 +111,8 @@ cargo run --features cli -- [OPTIONS] <ENTRY>...
 --cwd <DIR>               Working directory (default: current directory)
 --sourcemap               Generate source map (.d.ts.map)
 --cjs-default             Emit `export =` for single default export
--o, --outfile <PATH>      Write output to file instead of stdout
+-o, --outfile <PATH>      Write output to file instead of stdout (single entry only)
+--outdir <DIR>            Write outputs to directory (one per entry)
 ```
 
 ### Example
@@ -146,11 +155,12 @@ const result = bundle({
   sourcemap: true,
 });
 
-console.log(result.code);
-
-if (result.map) {
-  // result.map is a JSON string
-  fs.writeFileSync("dist/index.d.ts.map", result.map);
+for (const output of result.output) {
+  console.log(output.code);
+  if (output.map) {
+    // output.map is a JSON string
+    fs.writeFileSync("dist/index.d.ts.map", output.map);
+  }
 }
 
 for (const warning of result.warnings) {
@@ -169,9 +179,13 @@ interface BundleDtsOptions {
   cjsDefault?: boolean;
 }
 
-interface BundleDtsResult {
+interface BundleDtsOutput {
   code: string;
   map?: string;
+}
+
+interface BundleDtsResult {
+  output: Array<BundleDtsOutput>;
   warnings: Array<BundleDtsDiagnostic>;
 }
 

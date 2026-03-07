@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { FileEntry } from "../composables/useFiles";
 import { useTheme } from "../composables/useTheme";
+import type { BundleOutput } from "../types";
 
 const { isDark, toggle } = useTheme();
 
@@ -9,11 +10,20 @@ const props = defineProps<{
   ready: boolean;
   bundleTime: number;
   files: FileEntry[];
-  output: string;
+  output: BundleOutput[];
+  entryNames: string[];
 }>();
 
 function reportBug() {
-  const input = props.files.map((f) => `// ${f.name}\n${f.content}`).join("\n\n");
+  const input = props.files
+    .map((f) => `// ${f.name}${f.isEntry ? " (entry)" : ""}\n${f.content}`)
+    .join("\n\n");
+  const output =
+    props.output.length <= 1
+      ? (props.output[0]?.code ?? "")
+      : props.output
+          .map((o, i) => `// output-${props.entryNames[i] ?? `${i + 1}.d.ts`}\n${o.code}`)
+          .join("\n\n");
 
   const replLink = window.location.href;
 
@@ -21,7 +31,7 @@ function reportBug() {
     template: "bug_report.yml",
     title: "[Bug] ",
     input: input,
-    output: props.output,
+    output: output,
     "repl-link": replLink,
   });
 
