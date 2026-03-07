@@ -28,9 +28,113 @@ fn conformance() {
     let mut failures = Vec::new();
 
     for dir in &dirs {
+        let fixture_name = dir.file_name().unwrap().to_string_lossy().to_string();
+        let config_path = dir.join("config.json");
+
+        // Multi-entry fixtures have a config.json
+        if config_path.exists() {
+            let config: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(&config_path)
+                    .unwrap_or_else(|e| panic!("Failed to read config for {fixture_name}: {e}")),
+            )
+            .unwrap_or_else(|e| panic!("Failed to parse config for {fixture_name}: {e}"));
+
+            let entries: Vec<String> = config["entries"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{fixture_name}: config.json must have 'entries' array"))
+                .iter()
+                .map(|v| dir.join(v.as_str().unwrap()).to_string_lossy().to_string())
+                .collect();
+
+            // Collect expected snapshots per entry
+            let entry_stems: Vec<String> = config["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| {
+                    let name = v.as_str().unwrap();
+                    // "index.d.ts" -> "index", "a.d.ts" -> "a"
+                    name.strip_suffix(".d.ts").unwrap_or(name).to_string()
+                })
+                .collect();
+
+            let snapshots: Vec<Option<String>> = entry_stems
+                .iter()
+                .map(|stem| {
+                    let snap = dir.join(format!("snapshot-{stem}.d.ts"));
+                    if snap.exists() {
+                        Some(fs::read_to_string(&snap).unwrap_or_else(|e| {
+                            panic!("Failed to read snapshot for {fixture_name}/{stem}: {e}")
+                        }))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if snapshots.iter().all(Option::is_none) {
+                skipped += 1;
+                continue;
+            }
+
+            let result = TypackBundler::bundle(&TypackOptions {
+                input: entries,
+                cwd: crate_dir.clone(),
+                ..Default::default()
+            });
+
+            let outputs = match result {
+                Ok(bundle) => bundle.outputs,
+                Err(diagnostics) => {
+                    failed += 1;
+                    let msgs: Vec<String> =
+                        diagnostics.iter().map(std::string::ToString::to_string).collect();
+                    failures.push(format!("{fixture_name}: error: {}", msgs.join(", ")));
+                    continue;
+                }
+            };
+
+            if outputs.len() != entry_stems.len() {
+                failed += 1;
+                failures.push(format!(
+                    "{fixture_name}: expected {} outputs, got {}",
+                    entry_stems.len(),
+                    outputs.len()
+                ));
+                continue;
+            }
+
+            let mut fixture_ok = true;
+            for (i, (output, snapshot)) in outputs.iter().zip(&snapshots).enumerate() {
+                let stem = &entry_stems[i];
+                let Some(expected) = snapshot else { continue };
+
+                let expected_norm = expected.cow_replace("\r\n", "\n");
+                let actual_norm = output.code.cow_replace("\r\n", "\n");
+                if actual_norm == expected_norm {
+                    strict_passed += 1;
+                }
+
+                match lenient_compare(expected, &output.code) {
+                    Ok(()) => {}
+                    Err(diff) => {
+                        fixture_ok = false;
+                        failures.push(format!("{fixture_name}/{stem}:\n  {diff}"));
+                    }
+                }
+            }
+
+            if fixture_ok {
+                passed += 1;
+            } else {
+                failed += 1;
+            }
+            continue;
+        }
+
+        // Single-entry fixtures: index.d.ts + snapshot.d.ts
         let entry = dir.join("index.d.ts");
         let snapshot = dir.join("snapshot.d.ts");
-        let fixture_name = dir.file_name().unwrap().to_string_lossy().to_string();
 
         // Skip fixtures without standard entry point or snapshot
         if !entry.exists() || !snapshot.exists() {

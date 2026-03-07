@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use typack::{TypackBundler, TypackOptions};
 
+mod common;
+
 fn bundle_fixture_with_sourcemap(fixture: &str) -> (String, oxc_sourcemap::SourceMap) {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let tests_dir = crate_dir.join("tests");
