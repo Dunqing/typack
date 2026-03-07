@@ -11,6 +11,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: "rust-cache"
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy

@@ -60,7 +60,13 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const body = `🔗 **REPL Preview:** ${process.env.DEPLOYMENT_URL}`;
+            const branch = process.env.BRANCH_NAME.replace(/[/_.]/g, '-');
+            const branchUrl = `https://${branch}.typack.pages.dev`;
+            const body = [
+              `🔗 **REPL Preview**`,
+              `- **Branch:** ${branchUrl}`,
+              `- **Commit:** ${process.env.DEPLOYMENT_URL}`,
+            ].join('\n');
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -84,3 +90,4 @@ jobs:
             }
         env:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
+          BRANCH_NAME: ${{ github.head_ref }}
