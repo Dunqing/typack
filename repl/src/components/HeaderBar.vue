@@ -35,7 +35,7 @@ function reportBug() {
 
 <template>
   <header
-    class="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 py-2 text-slate-800 sm:px-4 dark:border-transparent dark:bg-slate-800 dark:text-slate-100"
+    class="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 py-2 text-slate-800 sm:px-4 dark:border-neutral-700 dark:bg-neutral-900 dark:text-slate-100"
   >
     <div class="flex min-w-0 items-center gap-2 sm:gap-3">
       <h1 class="shrink-0 text-sm font-semibold sm:text-base">Typack REPL</h1>
