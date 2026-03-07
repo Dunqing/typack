@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Splitpanes, Pane } from "splitpanes";
-import { watch } from "vue";
+import { ref, onMounted, onBeforeUnmount, watch } from "vue";
 
 import "splitpanes/dist/splitpanes.css";
 import EditorPanel from "./components/EditorPanel.vue";
@@ -16,6 +16,21 @@ const { output, diagnostics, loading, ready, bundleTime, bundle } = useTypack();
 
 useTheme();
 useUrlState(files, activeFile);
+
+const isMobile = ref(false);
+const mobilePanel = ref<"editor" | "output">("editor");
+const MQ = "(max-width: 767px)";
+
+function onMediaChange(e: MediaQueryListEvent | MediaQueryList) {
+  isMobile.value = e.matches;
+}
+
+onMounted(() => {
+  const mql = window.matchMedia(MQ);
+  onMediaChange(mql);
+  mql.addEventListener("change", onMediaChange);
+  onBeforeUnmount(() => mql.removeEventListener("change", onMediaChange));
+});
 
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -55,7 +70,8 @@ watch(ready, (isReady) => {
       :files="files"
       :output="output.code"
     />
-    <Splitpanes class="default-theme flex-1 overflow-hidden">
+    <!-- Desktop: side-by-side splitpanes -->
+    <Splitpanes v-if="!isMobile" class="default-theme flex-1 overflow-hidden">
       <Pane :size="50" :min-size="20">
         <EditorPanel
           :files="files"
@@ -71,5 +87,55 @@ watch(ready, (isReady) => {
         <OutputPanel :code="output.code" :map="output.map" :diagnostics="diagnostics" />
       </Pane>
     </Splitpanes>
+
+    <!-- Mobile: tabbed panels -->
+    <template v-else>
+      <div
+        class="flex shrink-0 border-b border-slate-300 bg-slate-100 dark:border-neutral-700 dark:bg-neutral-800"
+      >
+        <button
+          class="flex-1 cursor-pointer border-none bg-transparent py-2 text-xs font-medium transition-colors"
+          :class="
+            mobilePanel === 'editor'
+              ? 'border-b-2 border-b-blue-500 text-slate-900 dark:text-white'
+              : 'text-slate-500 dark:text-neutral-400'
+          "
+          @click="mobilePanel = 'editor'"
+        >
+          Editor
+        </button>
+        <button
+          class="flex-1 cursor-pointer border-none bg-transparent py-2 text-xs font-medium transition-colors"
+          :class="
+            mobilePanel === 'output'
+              ? 'border-b-2 border-b-blue-500 text-slate-900 dark:text-white'
+              : 'text-slate-500 dark:text-neutral-400'
+          "
+          @click="mobilePanel = 'output'"
+        >
+          Output
+        </button>
+      </div>
+      <div class="flex-1 overflow-hidden">
+        <EditorPanel
+          v-show="mobilePanel === 'editor'"
+          :files="files"
+          :active-file="activeFile"
+          class="h-full"
+          @update:active-file="activeFile = $event"
+          @update:content="updateContent"
+          @add-file="addFile"
+          @remove-file="removeFile"
+          @rename-file="renameFile"
+        />
+        <OutputPanel
+          v-show="mobilePanel === 'output'"
+          :code="output.code"
+          :map="output.map"
+          :diagnostics="diagnostics"
+          class="h-full"
+        />
+      </div>
+    </template>
   </div>
 </template>

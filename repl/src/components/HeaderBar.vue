@@ -35,10 +35,10 @@ function reportBug() {
 
 <template>
   <header
-    class="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 py-2 text-slate-800 dark:border-transparent dark:bg-slate-800 dark:text-slate-100"
+    class="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 py-2 text-slate-800 sm:px-4 dark:border-transparent dark:bg-slate-800 dark:text-slate-100"
   >
-    <div class="flex items-center gap-3">
-      <h1 class="text-base font-semibold">Typack REPL</h1>
+    <div class="flex min-w-0 items-center gap-2 sm:gap-3">
+      <h1 class="shrink-0 text-sm font-semibold sm:text-base">Typack REPL</h1>
       <span v-if="!ready" class="rounded bg-amber-400 px-2 py-0.5 text-xs text-black"
         >Loading WASM...</span
       >
@@ -49,10 +49,10 @@ function reportBug() {
         Ready<template v-if="bundleTime > 0"> · {{ bundleTime }}ms</template>
       </span>
     </div>
-    <div class="flex items-center gap-3">
+    <div class="flex items-center gap-2 sm:gap-3">
       <button
         type="button"
-        class="flex cursor-pointer items-center gap-1.5 rounded-md border border-slate-300 bg-transparent px-2.5 py-1 text-xs text-inherit transition-colors hover:border-slate-400 hover:bg-slate-200 dark:border-slate-600 dark:hover:border-slate-500 dark:hover:bg-slate-700"
+        class="flex cursor-pointer items-center gap-1.5 rounded-md border border-slate-300 bg-transparent px-2 py-1 text-xs text-inherit transition-colors hover:border-slate-400 hover:bg-slate-200 sm:px-2.5 dark:border-slate-600 dark:hover:border-slate-500 dark:hover:bg-slate-700"
         @click="reportBug"
         title="Report Bug"
       >
@@ -69,7 +69,7 @@ function reportBug() {
             0 0 1 4.72.22ZM6.173 5.98a2 2 0 1 0 3.654 0H6.173Z"
           />
         </svg>
-        Report Bug
+        <span class="hidden sm:inline">Report Bug</span>
       </button>
       <button
         type="button"
