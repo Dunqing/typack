@@ -61,7 +61,11 @@ impl<'a, 's> SemanticRenamer<'a, 's> {
 
     /// Resolve a symbol by semantic ID with name-based fallback for cloned ASTs,
     /// but only when the name is not shadowed by a type parameter.
-    fn resolve_binding_symbol(&self, name: &str, symbol_id: Option<oxc_syntax::symbol::SymbolId>) -> Option<oxc_syntax::symbol::SymbolId> {
+    fn resolve_binding_symbol(
+        &self,
+        name: &str,
+        symbol_id: Option<oxc_syntax::symbol::SymbolId>,
+    ) -> Option<oxc_syntax::symbol::SymbolId> {
         symbol_id.or_else(|| {
             if self.shadowed_names.contains(name) {
                 None
@@ -116,10 +120,8 @@ impl<'a> VisitMut<'a> for SemanticRenamer<'a, '_> {
     }
 
     fn visit_identifier_reference(&mut self, ident: &mut oxc_ast::ast::IdentifierReference<'a>) {
-        let symbol_id = ident
-            .reference_id
-            .get()
-            .and_then(|r| self.scoping.get_reference(r).symbol_id());
+        let symbol_id =
+            ident.reference_id.get().and_then(|r| self.scoping.get_reference(r).symbol_id());
         if let Some(symbol_id) = self.resolve_binding_symbol(&ident.name, symbol_id)
             && let Some(new_name) = self.renamed_symbols.get(&symbol_id)
         {

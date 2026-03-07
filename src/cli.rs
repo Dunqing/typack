@@ -127,7 +127,9 @@ pub fn run_cli(args: &[String]) -> ! {
                         .to_string_lossy();
                     // Strip .d from stems like "index.d" (from "index.d.ts")
                     let stem = stem.strip_suffix(".d").unwrap_or(&stem);
-                    let out_path = if let Some(parent) = relative.parent().filter(|p| !p.as_os_str().is_empty()) {
+                    let out_path = if let Some(parent) =
+                        relative.parent().filter(|p| !p.as_os_str().is_empty())
+                    {
                         outdir.join(parent).join(format!("{stem}.d.ts"))
                     } else {
                         outdir.join(format!("{stem}.d.ts"))

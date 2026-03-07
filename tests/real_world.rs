@@ -70,7 +70,10 @@ fn real_world() {
                     continue;
                 }
             };
-            let output = bundle.outputs.into_iter().next()
+            let output = bundle
+                .outputs
+                .into_iter()
+                .next()
                 .unwrap_or_else(|| panic!("{fixture_name}: should have at least one output"));
             let actual = output.code;
 

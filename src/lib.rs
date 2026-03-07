@@ -78,10 +78,7 @@ impl TypackBundler {
                 stage.generate()
             };
             all_warnings.extend(generated.warnings);
-            all_outputs.push(BundleOutput {
-                code: generated.code,
-                map: generated.map,
-            });
+            all_outputs.push(BundleOutput { code: generated.code, map: generated.map });
         }
 
         Ok(BundleResult { outputs: all_outputs, warnings: all_warnings })

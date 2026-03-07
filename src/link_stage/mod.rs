@@ -18,9 +18,9 @@ pub use needed_names::build_needed_names;
 pub use rename::build_rename_plan;
 pub use resolved_exports::build_resolved_exports;
 pub use types::NeededKindFlags;
-pub use types::{LinkOutput, RenamePlan};
 #[cfg(test)]
 use types::NeededNamesPlan;
+pub use types::{LinkOutput, RenamePlan};
 
 use warnings::collect_link_warnings;
 
