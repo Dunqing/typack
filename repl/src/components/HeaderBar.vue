@@ -10,7 +10,7 @@ const props = defineProps<{
   ready: boolean;
   bundleTime: number;
   files: FileEntry[];
-  outputs: BundleOutput[];
+  output: BundleOutput[];
   entryNames: string[];
 }>();
 
@@ -19,9 +19,9 @@ function reportBug() {
     .map((f) => `// ${f.name}${f.isEntry ? " (entry)" : ""}\n${f.content}`)
     .join("\n\n");
   const output =
-    props.outputs.length <= 1
-      ? (props.outputs[0]?.code ?? "")
-      : props.outputs
+    props.output.length <= 1
+      ? (props.output[0]?.code ?? "")
+      : props.output
           .map((o, i) => `// output-${props.entryNames[i] ?? `${i + 1}.d.ts`}\n${o.code}`)
           .join("\n\n");
 

@@ -71,7 +71,7 @@ fn real_world() {
                 }
             };
             let output = bundle
-                .outputs
+                .output
                 .into_iter()
                 .next()
                 .unwrap_or_else(|| panic!("{fixture_name}: should have at least one output"));

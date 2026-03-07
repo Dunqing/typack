@@ -83,8 +83,8 @@ fn conformance() {
                 ..Default::default()
             });
 
-            let outputs = match result {
-                Ok(bundle) => bundle.outputs,
+            let output = match result {
+                Ok(bundle) => bundle.output,
                 Err(diagnostics) => {
                     failed += 1;
                     let msgs: Vec<String> =
@@ -94,28 +94,28 @@ fn conformance() {
                 }
             };
 
-            if outputs.len() != entry_stems.len() {
+            if output.len() != entry_stems.len() {
                 failed += 1;
                 failures.push(format!(
                     "{fixture_name}: expected {} outputs, got {}",
                     entry_stems.len(),
-                    outputs.len()
+                    output.len()
                 ));
                 continue;
             }
 
             let mut fixture_ok = true;
-            for (i, (output, snapshot)) in outputs.iter().zip(&snapshots).enumerate() {
+            for (i, (entry_output, snapshot)) in output.iter().zip(&snapshots).enumerate() {
                 let stem = &entry_stems[i];
                 let Some(expected) = snapshot else { continue };
 
                 let expected_norm = expected.cow_replace("\r\n", "\n");
-                let actual_norm = output.code.cow_replace("\r\n", "\n");
+                let actual_norm = entry_output.code.cow_replace("\r\n", "\n");
                 if actual_norm == expected_norm {
                     strict_passed += 1;
                 }
 
-                match lenient_compare(expected, &output.code) {
+                match lenient_compare(expected, &entry_output.code) {
                     Ok(()) => {}
                     Err(diff) => {
                         fixture_ok = false;
@@ -152,7 +152,7 @@ fn conformance() {
         });
 
         let actual = match result {
-            Ok(bundle) => bundle.outputs[0].code.clone(),
+            Ok(bundle) => bundle.output[0].code.clone(),
             Err(diagnostics) => {
                 failed += 1;
                 let msgs: Vec<String> =

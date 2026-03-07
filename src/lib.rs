@@ -36,8 +36,8 @@ pub struct BundleOutput {
 ///
 /// Contains one [`BundleOutput`] per entry point.
 pub struct BundleResult {
-    /// Per-entry bundled outputs.
-    pub outputs: Vec<BundleOutput>,
+    /// Per-entry bundled output.
+    pub output: Vec<BundleOutput>,
     /// Non-fatal warnings (e.g., unused exports, suspicious patterns).
     pub warnings: Vec<OxcDiagnostic>,
 }
@@ -84,6 +84,6 @@ impl TypackBundler {
             all_outputs.push(BundleOutput { code: generated.code, map: generated.map });
         }
 
-        Ok(BundleResult { outputs: all_outputs, warnings: all_warnings })
+        Ok(BundleResult { output: all_outputs, warnings: all_warnings })
     }
 }

@@ -17,11 +17,11 @@ interface TypackModule {
     sourcemap?: boolean;
     cjsDefault?: boolean;
     external?: string[];
-  }) => { outputs: BundleOutput[]; warnings: Diagnostic[] };
+  }) => { output: BundleOutput[]; warnings: Diagnostic[] };
 }
 
 export function useTypack() {
-  const outputs = shallowRef<BundleOutput[]>([]);
+  const output = shallowRef<BundleOutput[]>([]);
   const entryNames = ref<string[]>([]);
   const diagnostics = ref<Diagnostic[]>([]);
   const loading = ref(false);
@@ -139,7 +139,7 @@ export function useTypack() {
       const end = performance.now();
       bundleTime.value = Math.round(end - start);
 
-      outputs.value = result.outputs;
+      output.value = result.output;
       diagnostics.value = result.warnings ?? [];
     } catch (err: any) {
       // NAPI errors encode diagnostics as JSON in the message
@@ -150,11 +150,11 @@ export function useTypack() {
         errors = [{ message: String(err.message ?? err), severity: "error" }];
       }
       diagnostics.value = errors;
-      outputs.value = [];
+      output.value = [];
     } finally {
       loading.value = false;
     }
   }
 
-  return { outputs, entryNames, diagnostics, loading, ready, bundleTime, bundle };
+  return { output, entryNames, diagnostics, loading, ready, bundleTime, bundle };
 }

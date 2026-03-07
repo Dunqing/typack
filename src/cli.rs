@@ -103,7 +103,7 @@ pub fn run_cli(args: &[String]) -> ! {
 
             if let Some(outfile) = &cli.outfile {
                 // Single entry with --outfile
-                let output = &bundle.outputs[0];
+                let output = &bundle.output[0];
                 write_output_file(outfile, &output.code, output.map.as_ref());
             } else if let Some(outdir) = &cli.outdir {
                 // Multiple entries with --outdir
@@ -111,8 +111,8 @@ pub fn run_cli(args: &[String]) -> ! {
                     eprintln!("error: cannot create directory {}: {e}", outdir.display());
                     std::process::exit(1);
                 });
-                debug_assert_eq!(options.input.len(), bundle.outputs.len());
-                for (entry, output) in options.input.iter().zip(&bundle.outputs) {
+                debug_assert_eq!(options.input.len(), bundle.output.len());
+                for (entry, output) in options.input.iter().zip(&bundle.output) {
                     let entry_path = PathBuf::from(entry);
                     // Preserve relative directory structure under outdir;
                     // fall back to just the filename if the entry is outside cwd
@@ -137,8 +137,8 @@ pub fn run_cli(args: &[String]) -> ! {
                 }
             } else {
                 // Print to stdout
-                for (i, output) in bundle.outputs.iter().enumerate() {
-                    if bundle.outputs.len() > 1 {
+                for (i, output) in bundle.output.iter().enumerate() {
+                    if bundle.output.len() > 1 {
                         let entry_name = options.input.get(i).map_or_else(
                             || format!("{}.d.ts", i + 1),
                             |e| {
@@ -155,7 +155,7 @@ pub fn run_cli(args: &[String]) -> ! {
                     }
                     println!("{}", output.code);
                 }
-                if bundle.outputs.iter().any(|o| o.map.is_some()) {
+                if bundle.output.iter().any(|o| o.map.is_some()) {
                     eprintln!(
                         "warning: --sourcemap without --outfile/--outdir; source map not written"
                     );

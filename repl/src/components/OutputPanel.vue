@@ -8,7 +8,7 @@ import type { BundleOutput } from "../types";
 const { monacoTheme } = useTheme();
 
 const props = defineProps<{
-  outputs: BundleOutput[];
+  output: BundleOutput[];
   entryNames: string[];
   diagnostics: Array<{ message: string; severity: string }>;
 }>();
@@ -16,12 +16,12 @@ const props = defineProps<{
 const activeTab = ref<"output" | "diagnostics">("output");
 const activeOutputIdx = ref(0);
 
-const currentOutput = computed(() => props.outputs[activeOutputIdx.value]);
+const currentOutput = computed(() => props.output[activeOutputIdx.value]);
 const currentCode = computed(() => currentOutput.value?.code ?? "");
 const currentMap = computed(() => currentOutput.value?.map ?? null);
 
 watch(
-  () => props.outputs.length,
+  () => props.output.length,
   (len) => {
     if (activeOutputIdx.value >= len) {
       activeOutputIdx.value = Math.max(0, len - 1);
@@ -86,11 +86,11 @@ function openSourceMapViz() {
 <template>
   <div class="flex h-full flex-col">
     <div
-      v-if="outputs.length > 1"
+      v-if="output.length > 1"
       class="flex shrink-0 overflow-x-auto border-b border-slate-300 bg-slate-100 dark:border-neutral-700 dark:bg-neutral-900"
     >
       <button
-        v-for="(_, idx) in outputs"
+        v-for="(_, idx) in output"
         :key="idx"
         class="cursor-pointer border-r border-none border-slate-300 bg-transparent px-3 py-1.5 text-xs whitespace-nowrap transition-colors dark:border-neutral-700"
         :class="

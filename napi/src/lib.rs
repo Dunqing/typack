@@ -31,7 +31,7 @@ pub struct BundleDtsOutput {
 
 #[napi(object)]
 pub struct BundleDtsResult {
-    pub outputs: Vec<BundleDtsOutput>,
+    pub output: Vec<BundleDtsOutput>,
     pub warnings: Vec<BundleDtsDiagnostic>,
 }
 
@@ -46,8 +46,8 @@ fn bundle_impl(options: BundleDtsOptions) -> Result<BundleDtsResult> {
 
     match result {
         Ok(bundle) => Ok(BundleDtsResult {
-            outputs: bundle
-                .outputs
+            output: bundle
+                .output
                 .into_iter()
                 .map(|output| BundleDtsOutput {
                     code: output.code,

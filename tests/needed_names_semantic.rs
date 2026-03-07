@@ -12,7 +12,7 @@ fn bundle(project: &TempProject, entry: &str) -> String {
         ..Default::default()
     })
     .unwrap_or_else(|diagnostics| panic!("bundle failed: {diagnostics:?}"))
-    .outputs
+    .output
     .into_iter()
     .next()
     .expect("should have at least one output")

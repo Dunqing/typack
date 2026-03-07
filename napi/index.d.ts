@@ -23,6 +23,6 @@ export interface BundleDtsOutput {
 }
 
 export interface BundleDtsResult {
-  outputs: Array<BundleDtsOutput>;
+  output: Array<BundleDtsOutput>;
   warnings: Array<BundleDtsDiagnostic>;
 }

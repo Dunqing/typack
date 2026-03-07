@@ -13,7 +13,7 @@ import { useUrlState } from "./composables/useUrlState";
 
 const { files, activeFile, addFile, removeFile, renameFile, updateContent, toggleEntry } =
   useFiles();
-const { outputs, entryNames, diagnostics, loading, ready, bundleTime, bundle } = useTypack();
+const { output, entryNames, diagnostics, loading, ready, bundleTime, bundle } = useTypack();
 
 useTheme();
 useUrlState(files, activeFile);
@@ -75,7 +75,7 @@ watch(ready, (isReady) => {
       :ready="ready"
       :bundle-time="bundleTime"
       :files="files"
-      :outputs="outputs"
+      :output="output"
       :entry-names="entryNames"
     />
     <!-- Desktop: side-by-side splitpanes -->
@@ -93,7 +93,7 @@ watch(ready, (isReady) => {
         />
       </Pane>
       <Pane :size="50" :min-size="20">
-        <OutputPanel :outputs="outputs" :entry-names="entryNames" :diagnostics="diagnostics" />
+        <OutputPanel :output="output" :entry-names="entryNames" :diagnostics="diagnostics" />
       </Pane>
     </Splitpanes>
 
@@ -140,7 +140,7 @@ watch(ready, (isReady) => {
         />
         <OutputPanel
           v-show="mobilePanel === 'output'"
-          :outputs="outputs"
+          :output="output"
           :entry-names="entryNames"
           :diagnostics="diagnostics"
           class="h-full"
