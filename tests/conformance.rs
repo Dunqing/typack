@@ -21,6 +21,8 @@ fn conformance() {
         .collect();
     dirs.sort();
 
+    let fixture_filter = std::env::var("FIXTURE").ok();
+
     let mut passed = 0;
     let mut strict_passed = 0;
     let mut failed = 0;
@@ -29,6 +31,13 @@ fn conformance() {
 
     for dir in &dirs {
         let fixture_name = dir.file_name().unwrap().to_string_lossy().to_string();
+
+        if let Some(filter) = &fixture_filter {
+            if !fixture_name.contains(filter) {
+                continue;
+            }
+        }
+
         let config_path = dir.join("config.json");
 
         // Multi-entry fixtures have a config.json
