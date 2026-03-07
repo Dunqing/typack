@@ -1,9 +1,29 @@
 <script setup lang="ts">
-defineProps<{
+import type { FileEntry } from "../composables/useFiles";
+
+const props = defineProps<{
   loading: boolean;
   ready: boolean;
   bundleTime: number;
+  files: FileEntry[];
+  output: string;
 }>();
+
+function reportBug() {
+  const input = props.files.map((f) => `// ${f.name}\n${f.content}`).join("\n\n");
+
+  const replLink = window.location.href;
+
+  const params = new URLSearchParams({
+    template: "bug_report.yml",
+    title: "[Bug] ",
+    input: input,
+    output: props.output,
+    "repl-link": replLink,
+  });
+
+  window.open(`https://github.com/Dunqing/typack/issues/new?${params.toString()}`, "_blank");
+}
 </script>
 
 <template>
@@ -17,6 +37,22 @@ defineProps<{
       >
     </div>
     <div class="header-right">
+      <button class="report-bug" @click="reportBug" title="Report Bug">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+          <path
+            d="M4.72.22a.75.75 0 0 1 1.06 0l1 .999a3.49 3.49 0 0 1 2.441 0l.999-1a.75.75 0 1 1
+            1.06 1.062l-.69.691a3.503 3.503 0 0 1 1.39 2.217l1.782-.884a.75.75 0 0 1
+            .67 1.34L12.64 5.53l.001.074a3.5 3.5 0 0 1-.022.427h2.131a.75.75 0 0 1
+            0 1.5h-2.318a3.5 3.5 0 0 1-1.207 1.678l1.463 1.462a.75.75 0 0 1-1.06
+            1.06l-1.586-1.585a3.5 3.5 0 0 1-1.085.2v3.404a.75.75 0 0 1-1.5
+            0v-3.404a3.5 3.5 0 0 1-1.085-.2L5.787 11.73a.75.75 0 0 1-1.06-1.06l1.462-1.462a3.5
+            3.5 0 0 1-1.207-1.678H2.75a.75.75 0 0 1 0-1.5h2.132a3.5 3.5 0 0 1-.023-.426l.001-.075
+            L3.067 4.646a.75.75 0 0 1 .67-1.34l1.783.884A3.503 3.503 0 0 1 6.93 1.97l-.69-.69A.75.75
+            0 0 1 4.72.22ZM6.173 5.98a2 2 0 1 0 3.654 0H6.173Z"
+          />
+        </svg>
+        Report Bug
+      </button>
       <a
         href="https://github.com/Dunqing/typack"
         target="_blank"
@@ -81,6 +117,33 @@ defineProps<{
 .status.ready {
   background: #22c55e;
   color: #000;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.report-bug {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  background: transparent;
+  color: #f1f5f9;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.report-bug:hover {
+  background: #334155;
+  border-color: #64748b;
 }
 
 .github-link {
