@@ -53,6 +53,7 @@ pub struct GenerateStage<'a, 'b> {
     sourcemap: bool,
     cjs_default: bool,
     cwd: &'b Path,
+    rename_plan: RenamePlan,
 }
 
 /// Output from generate stage.
@@ -70,15 +71,18 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         sourcemap: bool,
         cjs_default: bool,
         cwd: &'b Path,
+        rename_plan: RenamePlan,
     ) -> Self {
-        Self { scan_result, entry_idx, allocator, sourcemap, cjs_default, cwd }
+        Self { scan_result, entry_idx, allocator, sourcemap, cjs_default, cwd, rename_plan }
     }
 
     /// Generate the bundled `.d.ts` output.
     pub fn generate(&mut self) -> GenerateOutput {
         let mut output = OutputAssembler::default();
         let mut acc = GenerateAcc::default();
-        let mut link_output = build_link_output_for_entry(self.scan_result, self.entry_idx);
+        let rename_plan = std::mem::take(&mut self.rename_plan);
+        let mut link_output =
+            build_link_output_for_entry(self.scan_result, self.entry_idx, rename_plan);
 
         // Collect and deduplicate reference directives from all modules
         let mut seen_set: FxHashSet<&str> = FxHashSet::default();

@@ -31,9 +31,8 @@ use warnings::collect_link_warnings;
 pub fn build_link_output_for_entry(
     scan_result: &ScanResult<'_>,
     entry_idx: ModuleIdx,
+    rename_plan: RenamePlan,
 ) -> LinkOutput {
-    let rename_plan = build_rename_plan(scan_result);
-
     let mut needed_names_plan = build_needed_names(&scan_result.modules[entry_idx], scan_result);
     // Keep the entry module whole (no tree-shaking within the entry itself).
     needed_names_plan.map.insert(entry_idx, None);

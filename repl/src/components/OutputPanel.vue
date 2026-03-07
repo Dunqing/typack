@@ -3,11 +3,7 @@ import loader from "@monaco-editor/loader";
 import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 
 import { useTheme } from "../composables/useTheme";
-
-interface BundleOutput {
-  code: string;
-  map: string | null;
-}
+import type { BundleOutput } from "../types";
 
 const { monacoTheme } = useTheme();
 

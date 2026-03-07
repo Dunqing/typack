@@ -1,13 +1,9 @@
 <script setup lang="ts">
 import type { FileEntry } from "../composables/useFiles";
 import { useTheme } from "../composables/useTheme";
+import type { BundleOutput } from "../types";
 
 const { isDark, toggle } = useTheme();
-
-interface BundleOutput {
-  code: string;
-  map: string | null;
-}
 
 const props = defineProps<{
   loading: boolean;

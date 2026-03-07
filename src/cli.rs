@@ -111,6 +111,7 @@ pub fn run_cli(args: &[String]) -> ! {
                     eprintln!("error: cannot create directory {}: {e}", outdir.display());
                     std::process::exit(1);
                 });
+                debug_assert_eq!(options.input.len(), bundle.outputs.len());
                 for (entry, output) in options.input.iter().zip(&bundle.outputs) {
                     let entry_path = PathBuf::from(entry);
                     // Preserve relative directory structure under outdir;
@@ -136,7 +137,22 @@ pub fn run_cli(args: &[String]) -> ! {
                 }
             } else {
                 // Print to stdout
-                for output in &bundle.outputs {
+                for (i, output) in bundle.outputs.iter().enumerate() {
+                    if bundle.outputs.len() > 1 {
+                        let entry_name = options.input.get(i).map_or_else(
+                            || format!("{}.d.ts", i + 1),
+                            |e| {
+                                PathBuf::from(e).file_name().map_or_else(
+                                    || format!("{}.d.ts", i + 1),
+                                    |n| n.to_string_lossy().to_string(),
+                                )
+                            },
+                        );
+                        if i > 0 {
+                            println!();
+                        }
+                        println!("// --- entry: {entry_name} ---");
+                    }
                     println!("{}", output.code);
                 }
                 if bundle.outputs.iter().any(|o| o.map.is_some()) {
@@ -157,7 +173,7 @@ pub fn run_cli(args: &[String]) -> ! {
     }
 }
 
-fn write_output_file(path: &PathBuf, code: &str, map: Option<&oxc_sourcemap::SourceMap>) {
+fn write_output_file(path: &Path, code: &str, map: Option<&oxc_sourcemap::SourceMap>) {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
