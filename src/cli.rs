@@ -86,13 +86,14 @@ pub fn run_cli(args: &[String]) -> ! {
         std::process::exit(1);
     }
 
-    let result = TypackBundler::bundle(&TypackOptions {
-        input: input.clone(),
+    let options = TypackOptions {
+        input,
         external: cli.external,
-        cwd: cwd.clone(),
+        cwd,
         sourcemap: cli.sourcemap,
         cjs_default: cli.cjs_default,
-    });
+    };
+    let result = TypackBundler::bundle(&options);
 
     match result {
         Ok(bundle) => {
@@ -110,11 +111,11 @@ pub fn run_cli(args: &[String]) -> ! {
                     eprintln!("error: cannot create directory {}: {e}", outdir.display());
                     std::process::exit(1);
                 });
-                for (entry, output) in input.iter().zip(&bundle.outputs) {
+                for (entry, output) in options.input.iter().zip(&bundle.outputs) {
                     let entry_path = PathBuf::from(entry);
                     // Preserve relative directory structure under outdir
                     let relative = entry_path
-                        .strip_prefix(&cwd)
+                        .strip_prefix(&options.cwd)
                         .unwrap_or(&entry_path);
                     let stem = relative
                         .file_stem()
