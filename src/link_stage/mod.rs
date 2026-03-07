@@ -20,7 +20,8 @@ pub use resolved_exports::build_resolved_exports;
 pub use types::NeededKindFlags;
 #[cfg(test)]
 use types::NeededNamesPlan;
-pub use types::{LinkOutput, RenamePlan};
+#[expect(unused_imports)]
+pub use types::{LinkStageOutput, PerEntryLinkData, RenamePlan};
 
 use warnings::collect_link_warnings;
 
@@ -32,7 +33,7 @@ pub fn build_link_output_for_entry(
     scan_result: &ScanResult<'_>,
     entry_idx: ModuleIdx,
     rename_plan: RenamePlan,
-) -> LinkOutput {
+) -> PerEntryLinkData {
     let mut needed_names_plan = build_needed_names(&scan_result.modules[entry_idx], scan_result);
 
     // Compute only the symbols the entry actually needs (exports + augmentation
@@ -66,7 +67,7 @@ pub fn build_link_output_for_entry(
     let mut warnings = collect_link_warnings(&rename_plan, scan_result);
     warnings.extend(build_resolved_exports(scan_result));
 
-    LinkOutput { rename_plan, needed_names_plan, default_export_names, warnings }
+    PerEntryLinkData { rename_plan, needed_names_plan, default_export_names, warnings }
 }
 
 #[cfg(test)]

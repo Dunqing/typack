@@ -350,7 +350,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         let exports_start = acc.exports.len();
         let imports_start = acc.imports.len();
         let module = &self.scan_result.modules[module_idx];
-        let mut input_body = { module.program.body.clone_in_with_semantic_ids(self.allocator) };
+        let mut input_body = module.program.body.clone_in_with_semantic_ids(self.allocator);
         for stmt in input_body.drain(..) {
             let module = &self.scan_result.modules[module_idx];
             self.process_statement_ast(
