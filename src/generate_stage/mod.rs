@@ -46,13 +46,16 @@ use rewriter::{InlineImportAndNamespaceRewriter, SemanticRenamer, ensure_declare
 use types::*;
 
 /// Generate stage: produces the bundled `.d.ts` output.
-pub struct GenerateStage<'a> {
-    scan_result: &'a ScanResult<'a>,
+pub struct GenerateStage<'a, 'b> {
+    scan_result: &'b mut ScanResult<'a>,
     entry_idx: ModuleIdx,
     allocator: &'a Allocator,
     sourcemap: bool,
     cjs_default: bool,
-    cwd: &'a Path,
+    cwd: &'b Path,
+    /// When true, use `take_in` (zero-copy move) instead of `clone_in` for AST
+    /// bodies.  Safe only for the last entry since `take_in` empties the source.
+    is_last_entry: bool,
 }
 
 /// Output from generate stage.
@@ -62,20 +65,21 @@ pub struct GenerateOutput {
     pub warnings: Vec<OxcDiagnostic>,
 }
 
-impl<'a> GenerateStage<'a> {
+impl<'a, 'b> GenerateStage<'a, 'b> {
     pub fn new(
-        scan_result: &'a ScanResult<'a>,
+        scan_result: &'b mut ScanResult<'a>,
         entry_idx: ModuleIdx,
         allocator: &'a Allocator,
         sourcemap: bool,
         cjs_default: bool,
-        cwd: &'a Path,
+        cwd: &'b Path,
+        is_last_entry: bool,
     ) -> Self {
-        Self { scan_result, entry_idx, allocator, sourcemap, cjs_default, cwd }
+        Self { scan_result, entry_idx, allocator, sourcemap, cjs_default, cwd, is_last_entry }
     }
 
     /// Generate the bundled `.d.ts` output.
-    pub fn generate(&self) -> GenerateOutput {
+    pub fn generate(&mut self) -> GenerateOutput {
         let mut output = OutputAssembler::default();
         let mut acc = GenerateAcc::default();
         let mut link_output = build_link_output_for_entry(self.scan_result, self.entry_idx);
@@ -222,7 +226,7 @@ impl<'a> GenerateStage<'a> {
     }
 
     fn generate_module_ast(
-        &self,
+        &mut self,
         module_idx: ModuleIdx,
         is_entry: bool,
         shared: &GenerateSharedCtx<'_>,
@@ -353,7 +357,10 @@ impl<'a> GenerateStage<'a> {
         let mut transformed_body = ast.vec();
         let exports_start = acc.exports.len();
         let imports_start = acc.imports.len();
-        let input_body = {
+        let input_body = if self.is_last_entry {
+            let module = &mut self.scan_result.modules[module_idx];
+            module.program.body.take_in(self.allocator)
+        } else {
             let module = &self.scan_result.modules[module_idx];
             module.program.body.clone_in(self.allocator)
         };
@@ -548,7 +555,21 @@ impl<'a> GenerateStage<'a> {
             )
         };
 
-        let (comments, hashbang, directives) = {
+        let (comments, hashbang, directives) = if self.is_last_entry {
+            let module = &mut self.scan_result.modules[module_idx];
+            let taken_comments = module.program.comments.take_in(self.allocator);
+            let comments = ast.vec_from_iter(taken_comments.into_iter().filter(|comment| {
+                let comment_text = comment.span.source_text(source_text).trim();
+                if reference_directive_set.contains(comment_text) {
+                    return false;
+                }
+                !(comment_text.starts_with("//# sourceMappingURL=")
+                    || comment_text.starts_with("//@ sourceMappingURL="))
+            }));
+            let hashbang = module.program.hashbang.take();
+            let directives = module.program.directives.take_in(self.allocator);
+            (comments, hashbang, directives)
+        } else {
             let module = &self.scan_result.modules[module_idx];
             let cloned_comments = module.program.comments.clone_in(self.allocator);
             let comments = ast.vec_from_iter(cloned_comments.into_iter().filter(|comment| {
@@ -556,7 +577,6 @@ impl<'a> GenerateStage<'a> {
                 if reference_directive_set.contains(comment_text) {
                     return false;
                 }
-                // Strip sourceMappingURL comments from input .d.ts files
                 !(comment_text.starts_with("//# sourceMappingURL=")
                     || comment_text.starts_with("//@ sourceMappingURL="))
             }));
@@ -575,7 +595,12 @@ impl<'a> GenerateStage<'a> {
             transformed_body,
         );
 
-        let input_sourcemap = self.scan_result.modules[module_idx].input_sourcemap.as_ref();
+        let input_sourcemap = if self.is_last_entry {
+            self.scan_result.modules[module_idx].input_sourcemap.take()
+        } else {
+            self.scan_result.modules[module_idx].input_sourcemap.clone()
+        };
+        let input_sourcemap = input_sourcemap.as_ref();
 
         let mut codegen_options = CodegenOptions {
             indent_char: IndentChar::Space,

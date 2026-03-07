@@ -53,8 +53,9 @@ impl TypackBundler {
     /// Bundle `.d.ts` files, producing one output per entry point.
     ///
     /// All entries are scanned once into a shared module graph using a single
-    /// allocator.  Each entry then gets its own link + generate pass via
-    /// `clone_in`, so no AST is consumed and the scan result stays intact.
+    /// allocator.  Each entry then gets its own link + generate pass.  The last
+    /// entry uses `take_in` (zero-copy move) while earlier entries use
+    /// `clone_in` so the scan result stays intact for subsequent passes.
     ///
     /// # Errors
     ///
@@ -62,21 +63,27 @@ impl TypackBundler {
     /// such as parse failures or unresolvable import specifiers.
     pub fn bundle(options: &TypackOptions) -> Result<BundleResult, Vec<OxcDiagnostic>> {
         let allocator = Allocator::default();
-        let scan_result = ScanStage::new(options, &allocator).scan()?;
-        let mut all_warnings = scan_result.warnings.clone();
+        let mut scan_result = ScanStage::new(options, &allocator).scan()?;
+        let mut all_warnings = std::mem::take(&mut scan_result.warnings);
         let mut all_outputs = Vec::with_capacity(options.input.len());
+        let entry_count = options.input.len();
+        let entry_indices = scan_result.entry_indices.clone();
 
         for (i, entry) in options.input.iter().enumerate() {
-            let entry_idx = scan_result.entry_indices[i];
-            let generated = GenerateStage::new(
-                &scan_result,
-                entry_idx,
-                &allocator,
-                options.sourcemap,
-                options.cjs_default,
-                &options.cwd,
-            )
-            .generate();
+            let entry_idx = entry_indices[i];
+            let is_last_entry = i + 1 == entry_count;
+            let generated = {
+                let mut stage = GenerateStage::new(
+                    &mut scan_result,
+                    entry_idx,
+                    &allocator,
+                    options.sourcemap,
+                    options.cjs_default,
+                    &options.cwd,
+                    is_last_entry,
+                );
+                stage.generate()
+            };
             all_warnings.extend(generated.warnings);
             all_outputs.push(BundleOutput {
                 entry: entry.clone(),
