@@ -9,6 +9,11 @@ body {
 .splitpanes__pane {
   display: flex;
   flex-direction: column;
+  background: white;
+}
+
+:root.dark .splitpanes__pane {
+  background: var(--color-neutral-900);
 }
 
 .splitpanes__splitter {
@@ -24,5 +29,13 @@ body {
 }
 
 :root.dark .splitpanes__splitter {
-  background: var(--color-slate-700);
+  background: var(--color-neutral-700);
+}
+
+:root.dark .default-theme .splitpanes--vertical > .splitpanes__splitter {
+  border-left-color: var(--color-neutral-700);
+}
+
+:root.dark .default-theme .splitpanes--horizontal > .splitpanes__splitter {
+  border-top-color: var(--color-neutral-700);
 }
