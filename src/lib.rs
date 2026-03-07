@@ -52,8 +52,8 @@ impl TypackBundler {
     /// Bundle `.d.ts` files, producing one output per entry point.
     ///
     /// All entries are scanned once into a shared module graph using a single
-    /// allocator.  Each entry then gets its own link + generate pass using
-    /// `take_in` (zero-copy move) from the shared scan result.
+    /// allocator.  Each entry then gets its own link + generate pass that clones
+    /// the required AST structures from the shared scan result.
     ///
     /// # Errors
     ///

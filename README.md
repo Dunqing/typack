@@ -50,7 +50,7 @@ let result = TypackBundler::bundle(&TypackOptions {
 
 match result {
     Ok(bundle) => {
-        for output in &bundle.outputs {
+        for output in &bundle.output {
             println!("{}", output.code);
             if let Some(map) = &output.map {
                 // write source map to disk
@@ -83,10 +83,10 @@ match result {
 
 **`BundleResult`**
 
-| Field      | Type                 | Description               |
-| ---------- | -------------------- | ------------------------- |
-| `outputs`  | `Vec<BundleOutput>`  | Per-entry bundled outputs |
-| `warnings` | `Vec<OxcDiagnostic>` | Non-fatal warnings        |
+| Field      | Type                 | Description              |
+| ---------- | -------------------- | ------------------------ |
+| `output`   | `Vec<BundleOutput>`  | Per-entry bundled output |
+| `warnings` | `Vec<OxcDiagnostic>` | Non-fatal warnings       |
 
 **`BundleOutput`**
 
@@ -111,7 +111,8 @@ cargo run --features cli -- [OPTIONS] <ENTRY>...
 --cwd <DIR>               Working directory (default: current directory)
 --sourcemap               Generate source map (.d.ts.map)
 --cjs-default             Emit `export =` for single default export
--o, --outfile <PATH>      Write output to file instead of stdout
+-o, --outfile <PATH>      Write output to file instead of stdout (single entry only)
+--outdir <DIR>            Write outputs to directory (one per entry)
 ```
 
 ### Example
@@ -154,7 +155,7 @@ const result = bundle({
   sourcemap: true,
 });
 
-for (const output of result.outputs) {
+for (const output of result.output) {
   console.log(output.code);
   if (output.map) {
     // output.map is a JSON string
@@ -184,7 +185,7 @@ interface BundleDtsOutput {
 }
 
 interface BundleDtsResult {
-  outputs: Array<BundleDtsOutput>;
+  output: Array<BundleDtsOutput>;
   warnings: Array<BundleDtsDiagnostic>;
 }
 
