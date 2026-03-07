@@ -24,8 +24,6 @@ use crate::scan_stage::ScanStage;
 
 /// A single bundled output for one entry point.
 pub struct BundleOutput {
-    /// The entry file path that produced this output.
-    pub entry: String,
     /// The bundled `.d.ts` output code.
     pub code: String,
     /// Source map mapping bundled output back to original `.d.ts` sources.
@@ -67,8 +65,7 @@ impl TypackBundler {
         let mut all_outputs = Vec::with_capacity(options.input.len());
         let entry_indices = scan_result.entry_indices.clone();
 
-        for (i, entry) in options.input.iter().enumerate() {
-            let entry_idx = entry_indices[i];
+        for &entry_idx in &entry_indices {
             let generated = {
                 let mut stage = GenerateStage::new(
                     &mut scan_result,
@@ -82,7 +79,6 @@ impl TypackBundler {
             };
             all_warnings.extend(generated.warnings);
             all_outputs.push(BundleOutput {
-                entry: entry.clone(),
                 code: generated.code,
                 map: generated.map,
             });

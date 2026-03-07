@@ -110,8 +110,8 @@ pub fn run_cli(args: &[String]) -> ! {
                     eprintln!("error: cannot create directory {}: {e}", outdir.display());
                     std::process::exit(1);
                 });
-                for output in &bundle.outputs {
-                    let entry_path = PathBuf::from(&output.entry);
+                for (entry, output) in options.input.iter().zip(&bundle.outputs) {
+                    let entry_path = PathBuf::from(entry);
                     let stem = entry_path
                         .file_stem()
                         .unwrap_or_else(|| entry_path.as_os_str())
