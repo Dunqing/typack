@@ -39,7 +39,6 @@ struct CrossModuleDep {
 struct InlineImportDep {
     target_module_idx: ModuleIdx,
     target_name: Option<String>,
-    kind: NeededKindFlags,
 }
 
 struct ModuleExpansion {
@@ -49,8 +48,22 @@ struct ModuleExpansion {
     inline_import_deps: Vec<InlineImportDep>,
 }
 
+/// Builds the tree-shaking plan determining which symbols from each module are needed.
 pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> NeededNamesPlan {
     let declaration_graphs = build_declaration_graphs(scan_result);
+    let root_names: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>> = scan_result
+        .modules
+        .iter()
+        .map(|m| {
+            let map: FxHashMap<SymbolId, String> = m
+                .scoping
+                .get_bindings(m.scoping.root_scope_id())
+                .into_iter()
+                .map(|(name, &sid)| (sid, name.to_string()))
+                .collect();
+            (m.idx, map)
+        })
+        .collect();
     let mut needed_names: FxHashMap<ModuleIdx, FxHashSet<SymbolId>> = FxHashMap::default();
     let mut needed_exports: FxHashMap<ModuleIdx, FxHashSet<String>> = FxHashMap::default();
     let mut whole_modules: FxHashSet<ModuleIdx> = FxHashSet::default();
@@ -65,6 +78,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
         &mut needed_exports,
         &mut whole_modules,
         &mut reasons,
+        &root_names,
     );
     propagate_entry_retained_dependencies(
         entry,
@@ -74,6 +88,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
         &mut needed_exports,
         &mut whole_modules,
         &mut reasons,
+        &root_names,
     );
 
     let mut changed = true;
@@ -84,12 +99,9 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
             &mut needed_exports,
             &mut reasons,
             scan_result,
+            &root_names,
         );
 
-        let current_needed = needed_names.clone();
-        let current_exports = needed_exports.clone();
-        let current_whole = whole_modules.clone();
-        let current_symbol_kinds = symbol_kinds.clone();
         let mut next_symbol_kinds: FxHashMap<
             ModuleIdx,
             Option<FxHashMap<SymbolId, NeededKindFlags>>,
@@ -103,9 +115,9 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
                 continue;
             }
 
-            let direct_needed = current_needed.get(&module.idx);
-            let direct_exports = current_exports.get(&module.idx);
-            let is_whole = current_whole.contains(&module.idx) || module.has_augmentation;
+            let direct_needed = needed_names.get(&module.idx);
+            let direct_exports = needed_exports.get(&module.idx);
+            let is_whole = whole_modules.contains(&module.idx) || module.has_augmentation;
             if direct_needed.is_none() && direct_exports.is_none() && !is_whole {
                 continue;
             }
@@ -115,7 +127,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
                 declaration_graphs.get(&module.idx).map_or(&[], Vec::as_slice),
                 direct_needed,
                 is_whole,
-                current_symbol_kinds.get(&module.idx).and_then(|entry| entry.as_ref()),
+                symbol_kinds.get(&module.idx).and_then(|entry| entry.as_ref()),
             );
 
             if is_whole {
@@ -124,7 +136,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
                 next_symbol_kinds.insert(module.idx, Some(expansion.needed_symbols.clone()));
             }
 
-            let before_symbols = current_needed.get(&module.idx);
+            let before_symbols = needed_names.get(&module.idx);
             for symbol_id in &expansion.expanded_symbols {
                 if before_symbols.is_none_or(|set| !set.contains(symbol_id)) {
                     symbol_additions.push((
@@ -152,7 +164,6 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
                         NeededReason::InlineImportReference,
                     ));
                 } else {
-                    let _ = dep.kind;
                     whole_additions
                         .push((dep.target_module_idx, NeededReason::InlineImportReference));
                 }
@@ -170,6 +181,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
                 module_idx,
                 reason,
                 scan_result,
+                &root_names,
             );
         }
 
@@ -177,10 +189,10 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
             changed |= add_needed_symbol(
                 &mut needed_names,
                 &mut reasons,
-                scan_result,
                 module_idx,
                 symbol_id,
                 reason,
+                &root_names,
             );
         }
 
@@ -193,6 +205,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
                 module_idx,
                 &name,
                 reason,
+                &root_names,
             );
         }
     }
@@ -211,6 +224,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
     NeededNamesPlan { map, symbol_kinds, reasons }
 }
 
+/// Seeds the needed names with symbols exported from the entry module.
 fn seed_entry_exports(
     entry: &Module<'_>,
     scan_result: &ScanResult<'_>,
@@ -218,6 +232,7 @@ fn seed_entry_exports(
     needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     whole_modules: &mut FxHashSet<ModuleIdx>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
+    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) {
     let entry_info = &entry.export_import_info;
 
@@ -236,6 +251,7 @@ fn seed_entry_exports(
                 target_idx,
                 &name,
                 NeededReason::EntryNamedReexport,
+                root_names,
             );
         }
     }
@@ -249,6 +265,7 @@ fn seed_entry_exports(
                     reasons,
                     target_idx,
                     scan_result,
+                    root_names,
                 );
             } else {
                 for name in collect_all_exported_names(target_idx, scan_result) {
@@ -260,6 +277,7 @@ fn seed_entry_exports(
                         target_idx,
                         &name,
                         NeededReason::EntryStarReexport,
+                        root_names,
                     );
                 }
             }
@@ -326,6 +344,7 @@ fn seed_entry_exports(
                             target_idx,
                             &local_name,
                             NeededReason::EntryNamedReexport,
+                            root_names,
                         );
                     }
                     ImportDeclarationSpecifier::ImportDefaultSpecifier(_) => {
@@ -337,6 +356,7 @@ fn seed_entry_exports(
                             target_idx,
                             NeededReason::NamespaceRequirement,
                             scan_result,
+                            root_names,
                         );
                     }
                     ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {
@@ -346,6 +366,7 @@ fn seed_entry_exports(
                             reasons,
                             target_idx,
                             scan_result,
+                            root_names,
                         );
                     }
                 }
@@ -354,6 +375,7 @@ fn seed_entry_exports(
     }
 }
 
+/// Propagates cross-module dependencies from always-retained entry declarations.
 fn propagate_entry_retained_dependencies(
     _entry: &Module<'_>,
     nodes: &[DeclarationNode],
@@ -362,6 +384,7 @@ fn propagate_entry_retained_dependencies(
     needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     whole_modules: &mut FxHashSet<ModuleIdx>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
+    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) {
     for node in nodes {
         for dep in &node.cross_module_deps {
@@ -375,6 +398,7 @@ fn propagate_entry_retained_dependencies(
                         dep.target_module_idx,
                         name,
                         dep.reason,
+                        root_names,
                     );
                 }
                 None => {
@@ -386,6 +410,7 @@ fn propagate_entry_retained_dependencies(
                         dep.target_module_idx,
                         dep.reason,
                         scan_result,
+                        root_names,
                     );
                 }
             }
@@ -402,6 +427,7 @@ fn propagate_entry_retained_dependencies(
                         dep.target_module_idx,
                         name,
                         NeededReason::InlineImportReference,
+                        root_names,
                     );
                 }
                 None => {
@@ -413,6 +439,7 @@ fn propagate_entry_retained_dependencies(
                         dep.target_module_idx,
                         NeededReason::InlineImportReference,
                         scan_result,
+                        root_names,
                     );
                 }
             }
@@ -426,6 +453,7 @@ fn add_namespace_requirement(
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
     target_idx: ModuleIdx,
     scan_result: &ScanResult<'_>,
+    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) -> bool {
     let mut changed = false;
     for name in collect_all_exported_names(target_idx, scan_result) {
@@ -437,6 +465,7 @@ fn add_namespace_requirement(
             target_idx,
             &name,
             NeededReason::NamespaceRequirement,
+            root_names,
         );
     }
     changed
@@ -450,6 +479,7 @@ fn mark_module_whole_needed(
     module_idx: ModuleIdx,
     reason: NeededReason,
     scan_result: &ScanResult<'_>,
+    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) -> bool {
     let mut changed = whole_modules.insert(module_idx);
     for name in collect_all_exported_names(module_idx, scan_result) {
@@ -461,6 +491,7 @@ fn mark_module_whole_needed(
             module_idx,
             &name,
             reason,
+            root_names,
         );
     }
     changed
@@ -474,6 +505,7 @@ fn add_needed_name(
     module_idx: ModuleIdx,
     name: &str,
     reason: NeededReason,
+    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) -> bool {
     let inserted = needed_exports.entry(module_idx).or_default().insert(name.to_string());
     add_needed_reason(reasons, module_idx, name, reason);
@@ -481,7 +513,7 @@ fn add_needed_name(
     let symbol_changed = resolve_export_symbol(module, name)
         .or_else(|| module.scoping.get_root_binding(Ident::from(name)))
         .is_some_and(|symbol_id| {
-            add_needed_symbol(needed_names, reasons, scan_result, module_idx, symbol_id, reason)
+            add_needed_symbol(needed_names, reasons, module_idx, symbol_id, reason, root_names)
         });
     inserted || symbol_changed
 }
@@ -489,14 +521,14 @@ fn add_needed_name(
 fn add_needed_symbol(
     needed_names: &mut FxHashMap<ModuleIdx, FxHashSet<SymbolId>>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
-    scan_result: &ScanResult<'_>,
     module_idx: ModuleIdx,
     symbol_id: SymbolId,
     reason: NeededReason,
+    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) -> bool {
     let inserted = needed_names.entry(module_idx).or_default().insert(symbol_id);
-    if let Some(name) = root_symbol_name(&scan_result.modules[module_idx], symbol_id) {
-        add_needed_reason(reasons, module_idx, &name, reason);
+    if let Some(name) = root_names.get(&module_idx).and_then(|m| m.get(&symbol_id)) {
+        add_needed_reason(reasons, module_idx, name, reason);
     }
     inserted
 }
@@ -504,14 +536,6 @@ fn add_needed_symbol(
 fn resolve_export_symbol(module: &Module<'_>, exported_name: &str) -> Option<SymbolId> {
     let local_name = resolve_export_local_name(module, exported_name)?;
     module.scoping.get_root_binding(Ident::from(local_name.as_str()))
-}
-
-fn root_symbol_name(module: &Module<'_>, symbol_id: SymbolId) -> Option<String> {
-    module
-        .scoping
-        .get_bindings(module.scoping.root_scope_id())
-        .into_iter()
-        .find_map(|(name, &candidate)| (candidate == symbol_id).then(|| name.to_string()))
 }
 
 fn add_needed_reason(
@@ -523,6 +547,7 @@ fn add_needed_reason(
     reasons.entry((module_idx, name.to_string())).or_default().insert(reason);
 }
 
+/// Builds per-module declaration dependency graphs for semantic expansion.
 fn build_declaration_graphs(
     scan_result: &ScanResult<'_>,
 ) -> FxHashMap<ModuleIdx, Vec<DeclarationNode>> {
@@ -533,6 +558,7 @@ fn build_declaration_graphs(
         .collect()
 }
 
+/// Collects declaration nodes for a single module, capturing local and cross-module dependencies.
 fn collect_declaration_nodes(
     module: &Module<'_>,
     scan_result: &ScanResult<'_>,
@@ -688,6 +714,7 @@ fn collect_declaration_nodes(
     nodes
 }
 
+/// Expands needed symbols within a module by following local declaration dependencies.
 fn expand_module_graph(
     module: &Module<'_>,
     nodes: &[DeclarationNode],
@@ -772,6 +799,7 @@ fn propagate_needed_names(
     needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
     scan_result: &ScanResult<'_>,
+    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) -> bool {
     use std::collections::VecDeque;
 
@@ -795,10 +823,10 @@ fn propagate_needed_names(
                 changed |= add_needed_symbol(
                     needed,
                     reasons,
-                    scan_result,
                     module_idx,
                     symbol_id,
                     NeededReason::SemanticDependency,
+                    root_names,
                 );
             }
         }
@@ -864,6 +892,7 @@ fn propagate_needed_names(
                     *sub_module_idx,
                     &local,
                     NeededReason::PropagationNamedReexport,
+                    root_names,
                 ) {
                     changed = true;
                     queue.push_back(*sub_module_idx);
@@ -898,6 +927,7 @@ fn propagate_needed_names(
                     *sub_module_idx,
                     &name,
                     NeededReason::PropagationStarReexport,
+                    root_names,
                 ) {
                     changed = true;
                     queue.push_back(*sub_module_idx);
@@ -1100,13 +1130,8 @@ struct InlineImportCollector<'m, 'a> {
 }
 
 impl InlineImportCollector<'_, '_> {
-    fn record_target(
-        &mut self,
-        target_module_idx: ModuleIdx,
-        target_name: Option<String>,
-        kind: NeededKindFlags,
-    ) {
-        self.deps.push(InlineImportDep { target_module_idx, target_name, kind });
+    fn record_target(&mut self, target_module_idx: ModuleIdx, target_name: Option<String>) {
+        self.deps.push(InlineImportDep { target_module_idx, target_name });
     }
 }
 
@@ -1121,7 +1146,7 @@ impl<'a> Visit<'a> for InlineImportCollector<'_, 'a> {
                 let target_module = &self.scan_result.modules[target_module_idx];
                 resolve_export_local_name(target_module, &exported_name).unwrap_or(exported_name)
             });
-            self.record_target(target_module_idx, target_name, NeededKindFlags::TYPE);
+            self.record_target(target_module_idx, target_name);
         }
         oxc_ast_visit::walk::walk_ts_type(self, it);
     }
@@ -1136,7 +1161,7 @@ impl<'a> Visit<'a> for InlineImportCollector<'_, 'a> {
                 let target_module = &self.scan_result.modules[target_module_idx];
                 resolve_export_local_name(target_module, &exported_name).unwrap_or(exported_name)
             });
-            self.record_target(target_module_idx, target_name, NeededKindFlags::VALUE);
+            self.record_target(target_module_idx, target_name);
         }
         oxc_ast_visit::walk::walk_ts_type_query(self, it);
     }
@@ -1149,7 +1174,7 @@ impl<'a> Visit<'a> for InlineImportCollector<'_, 'a> {
             && let Some(target_module_idx) =
                 self.module.resolve_internal_specifier(ext.expression.value.as_str())
         {
-            self.record_target(target_module_idx, None, NeededKindFlags::ALL);
+            self.record_target(target_module_idx, None);
         }
         oxc_ast_visit::walk::walk_ts_import_equals_declaration(self, decl);
     }
