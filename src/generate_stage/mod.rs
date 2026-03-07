@@ -15,7 +15,7 @@ mod types;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
-use oxc_allocator::{Allocator, CloneIn, TakeIn};
+use oxc_allocator::{Allocator, TakeIn};
 use oxc_ast::AstBuilder;
 use oxc_ast::ast::{
     ExportDefaultDeclaration, ExportDefaultDeclarationKind, IdentifierReference, Statement,
@@ -53,9 +53,6 @@ pub struct GenerateStage<'a, 'b> {
     sourcemap: bool,
     cjs_default: bool,
     cwd: &'b Path,
-    /// When true, use `take_in` (zero-copy move) instead of `clone_in` for AST
-    /// bodies.  Safe only for the last entry since `take_in` empties the source.
-    is_last_entry: bool,
 }
 
 /// Output from generate stage.
@@ -73,9 +70,8 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         sourcemap: bool,
         cjs_default: bool,
         cwd: &'b Path,
-        is_last_entry: bool,
     ) -> Self {
-        Self { scan_result, entry_idx, allocator, sourcemap, cjs_default, cwd, is_last_entry }
+        Self { scan_result, entry_idx, allocator, sourcemap, cjs_default, cwd }
     }
 
     /// Generate the bundled `.d.ts` output.
@@ -357,14 +353,11 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         let mut transformed_body = ast.vec();
         let exports_start = acc.exports.len();
         let imports_start = acc.imports.len();
-        let input_body = if self.is_last_entry {
+        let mut input_body = {
             let module = &mut self.scan_result.modules[module_idx];
             module.program.body.take_in(self.allocator)
-        } else {
-            let module = &self.scan_result.modules[module_idx];
-            module.program.body.clone_in(self.allocator)
         };
-        for stmt in input_body {
+        for stmt in input_body.drain(..) {
             let module = &self.scan_result.modules[module_idx];
             self.process_statement_ast(
                 stmt,
@@ -555,7 +548,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             )
         };
 
-        let (comments, hashbang, directives) = if self.is_last_entry {
+        let (comments, hashbang, directives) = {
             let module = &mut self.scan_result.modules[module_idx];
             let taken_comments = module.program.comments.take_in(self.allocator);
             let comments = ast.vec_from_iter(taken_comments.into_iter().filter(|comment| {
@@ -569,20 +562,6 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             let hashbang = module.program.hashbang.take();
             let directives = module.program.directives.take_in(self.allocator);
             (comments, hashbang, directives)
-        } else {
-            let module = &self.scan_result.modules[module_idx];
-            let cloned_comments = module.program.comments.clone_in(self.allocator);
-            let comments = ast.vec_from_iter(cloned_comments.into_iter().filter(|comment| {
-                let comment_text = comment.span.source_text(source_text).trim();
-                if reference_directive_set.contains(comment_text) {
-                    return false;
-                }
-                !(comment_text.starts_with("//# sourceMappingURL=")
-                    || comment_text.starts_with("//@ sourceMappingURL="))
-            }));
-            let hashbang = module.program.hashbang.clone_in(self.allocator);
-            let directives = module.program.directives.clone_in(self.allocator);
-            (comments, hashbang, directives)
         };
 
         let program = ast.program(
@@ -595,12 +574,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             transformed_body,
         );
 
-        let input_sourcemap = if self.is_last_entry {
-            self.scan_result.modules[module_idx].input_sourcemap.take()
-        } else {
-            self.scan_result.modules[module_idx].input_sourcemap.clone()
-        };
-        let input_sourcemap = input_sourcemap.as_ref();
+        let input_sourcemap = self.scan_result.modules[module_idx].input_sourcemap.take();
 
         let mut codegen_options = CodegenOptions {
             indent_char: IndentChar::Space,
@@ -618,7 +592,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                     let module_path = &self.scan_result.modules[module_idx].path;
                     Some(sourcemap::compose_sourcemaps(
                         &codegen_map,
-                        input_map,
+                        &input_map,
                         module_path,
                         self.cwd,
                     ))

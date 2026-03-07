@@ -53,9 +53,8 @@ impl TypackBundler {
     /// Bundle `.d.ts` files, producing one output per entry point.
     ///
     /// All entries are scanned once into a shared module graph using a single
-    /// allocator.  Each entry then gets its own link + generate pass.  The last
-    /// entry uses `take_in` (zero-copy move) while earlier entries use
-    /// `clone_in` so the scan result stays intact for subsequent passes.
+    /// allocator.  Each entry then gets its own link + generate pass using
+    /// `take_in` (zero-copy move) from the shared scan result.
     ///
     /// # Errors
     ///
@@ -66,12 +65,10 @@ impl TypackBundler {
         let mut scan_result = ScanStage::new(options, &allocator).scan()?;
         let mut all_warnings = std::mem::take(&mut scan_result.warnings);
         let mut all_outputs = Vec::with_capacity(options.input.len());
-        let entry_count = options.input.len();
         let entry_indices = scan_result.entry_indices.clone();
 
         for (i, entry) in options.input.iter().enumerate() {
             let entry_idx = entry_indices[i];
-            let is_last_entry = i + 1 == entry_count;
             let generated = {
                 let mut stage = GenerateStage::new(
                     &mut scan_result,
@@ -80,7 +77,6 @@ impl TypackBundler {
                     options.sourcemap,
                     options.cjs_default,
                     &options.cwd,
-                    is_last_entry,
                 );
                 stage.generate()
             };
