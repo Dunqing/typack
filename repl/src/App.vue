@@ -7,12 +7,14 @@ import EditorPanel from "./components/EditorPanel.vue";
 import HeaderBar from "./components/HeaderBar.vue";
 import OutputPanel from "./components/OutputPanel.vue";
 import { useFiles } from "./composables/useFiles";
+import { useTheme } from "./composables/useTheme";
 import { useTypack } from "./composables/useTypack";
 import { useUrlState } from "./composables/useUrlState";
 
 const { files, activeFile, addFile, removeFile, renameFile, updateContent } = useFiles();
 const { output, diagnostics, loading, ready, bundleTime, bundle } = useTypack();
 
+useTheme();
 useUrlState(files, activeFile);
 
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -45,7 +47,7 @@ watch(ready, (isReady) => {
 </script>
 
 <template>
-  <div class="app">
+  <div class="flex h-full flex-col bg-white dark:bg-neutral-900">
     <HeaderBar
       :loading="loading"
       :ready="ready"
@@ -53,7 +55,7 @@ watch(ready, (isReady) => {
       :files="files"
       :output="output.code"
     />
-    <Splitpanes class="default-theme main-panes">
+    <Splitpanes class="default-theme flex-1 overflow-hidden">
       <Pane :size="50" :min-size="20">
         <EditorPanel
           :files="files"
@@ -71,26 +73,3 @@ watch(ready, (isReady) => {
     </Splitpanes>
   </div>
 </template>
-
-<style>
-.app {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-.main-panes {
-  flex: 1;
-  overflow: hidden;
-}
-.splitpanes__pane {
-  display: flex;
-  flex-direction: column;
-}
-.splitpanes__splitter {
-  background: #e2e8f0;
-  position: relative;
-}
-.default-theme .splitpanes__splitter {
-  min-width: 4px;
-}
-</style>

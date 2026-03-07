@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Splitpanes overrides (must be global — targets library class names) */
+.splitpanes__pane {
+  display: flex;
+  flex-direction: column;
+}
+
+.splitpanes__splitter {
+  position: relative;
+}
+
+.default-theme .splitpanes__splitter {
+  min-width: 4px;
+}
+
+:root .splitpanes__splitter {
+  background: var(--color-slate-300);
+}
+
+:root.dark .splitpanes__splitter {
+  background: var(--color-slate-700);
+}

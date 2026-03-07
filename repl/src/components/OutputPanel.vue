@@ -2,6 +2,10 @@
 import loader from "@monaco-editor/loader";
 import { ref, watch, onMounted, onBeforeUnmount } from "vue";
 
+import { useTheme } from "../composables/useTheme";
+
+const { monacoTheme } = useTheme();
+
 const props = defineProps<{
   code: string;
   map: string | null;
@@ -11,14 +15,15 @@ const props = defineProps<{
 const activeTab = ref<"output" | "diagnostics">("output");
 const editorContainer = ref<HTMLDivElement>();
 let editor: any = null;
+let monaco: any = null;
 
 onMounted(async () => {
-  const monaco = await loader.init();
+  monaco = await loader.init();
   if (!editorContainer.value) return;
   editor = monaco.editor.create(editorContainer.value, {
     value: props.code,
     language: "typescript",
-    theme: "vs-dark",
+    theme: monacoTheme.value,
     minimap: { enabled: false },
     fontSize: 13,
     readOnly: true,
@@ -30,6 +35,11 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   editor?.dispose();
+});
+
+// Watch for theme changes and update Monaco
+watch(monacoTheme, (theme) => {
+  monaco?.editor.setTheme(theme);
 });
 
 watch(
@@ -61,112 +71,70 @@ function openSourceMapViz() {
 </script>
 
 <template>
-  <div class="output-panel">
-    <div class="output-tabs">
+  <div class="flex h-full flex-col">
+    <div
+      class="flex shrink-0 border-b border-slate-300 bg-slate-100 dark:border-neutral-700 dark:bg-neutral-900"
+    >
       <button
-        class="output-tab"
-        :class="{ active: activeTab === 'output' }"
+        class="flex cursor-pointer items-center gap-1.5 border-none bg-transparent px-3 py-1.5 text-xs transition-colors"
+        :class="
+          activeTab === 'output'
+            ? 'border-b-2 border-b-blue-500 text-slate-900 dark:text-white'
+            : 'text-slate-500 hover:text-slate-700 dark:text-neutral-500 dark:hover:text-neutral-300'
+        "
         @click="activeTab = 'output'"
       >
         Output
       </button>
       <button
-        class="output-tab"
-        :class="{ active: activeTab === 'diagnostics' }"
+        class="flex cursor-pointer items-center gap-1.5 border-none bg-transparent px-3 py-1.5 text-xs transition-colors"
+        :class="
+          activeTab === 'diagnostics'
+            ? 'border-b-2 border-b-blue-500 text-slate-900 dark:text-white'
+            : 'text-slate-500 hover:text-slate-700 dark:text-neutral-500 dark:hover:text-neutral-300'
+        "
         @click="activeTab = 'diagnostics'"
       >
         Diagnostics
-        <span v-if="diagnostics.length" class="badge">{{ diagnostics.length }}</span>
+        <span
+          v-if="diagnostics.length"
+          class="rounded-full bg-red-500 px-1.5 py-px text-[10px] text-white"
+        >
+          {{ diagnostics.length }}
+        </span>
       </button>
-      <button v-if="map" class="output-tab" @click="openSourceMapViz">Visualize Source Map</button>
+      <button
+        v-if="map"
+        class="flex cursor-pointer items-center gap-1.5 border-none bg-transparent px-3 py-1.5 text-xs text-slate-500 transition-colors hover:text-slate-700 dark:text-neutral-500 dark:hover:text-neutral-300"
+        @click="openSourceMapViz"
+      >
+        Visualize Source Map
+      </button>
     </div>
-    <div v-show="activeTab === 'output'" ref="editorContainer" class="editor-container" />
-    <div v-show="activeTab === 'diagnostics'" class="diagnostics">
-      <div v-if="!diagnostics.length" class="empty">No diagnostics</div>
-      <div v-for="(d, i) in diagnostics" :key="i" class="diagnostic" :class="d.severity">
-        <span class="severity-badge">{{ d.severity }}</span>
-        <span class="message">{{ d.message }}</span>
+    <div v-show="activeTab === 'output'" ref="editorContainer" class="flex-1" />
+    <div
+      v-show="activeTab === 'diagnostics'"
+      class="flex-1 overflow-y-auto bg-white p-2 text-slate-800 dark:bg-neutral-900 dark:text-neutral-300"
+    >
+      <div
+        v-if="!diagnostics.length"
+        class="py-6 text-center text-sm text-slate-400 dark:text-neutral-600"
+      >
+        No diagnostics
+      </div>
+      <div
+        v-for="(d, i) in diagnostics"
+        :key="i"
+        class="flex items-start gap-2 border-b border-slate-200 p-2 text-sm dark:border-neutral-700"
+      >
+        <span
+          class="shrink-0 rounded px-1.5 py-px text-[10px] uppercase"
+          :class="d.severity === 'error' ? 'bg-red-500 text-white' : 'bg-amber-400 text-black'"
+        >
+          {{ d.severity }}
+        </span>
+        <span class="break-words">{{ d.message }}</span>
       </div>
     </div>
   </div>
 </template>
-
-<style scoped>
-.output-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-.output-tabs {
-  display: flex;
-  background: #1e1e1e;
-  border-bottom: 1px solid #333;
-  flex-shrink: 0;
-}
-.output-tab {
-  padding: 6px 12px;
-  color: #999;
-  cursor: pointer;
-  font-size: 12px;
-  border: none;
-  background: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.output-tab.active {
-  color: #fff;
-  border-bottom: 2px solid #3b82f6;
-}
-.output-tab:hover {
-  color: #ddd;
-}
-.badge {
-  background: #ef4444;
-  color: white;
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 8px;
-}
-.editor-container {
-  flex: 1;
-}
-.diagnostics {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px;
-  background: #1e1e1e;
-  color: #ddd;
-}
-.empty {
-  color: #666;
-  text-align: center;
-  padding: 24px;
-  font-size: 13px;
-}
-.diagnostic {
-  padding: 8px;
-  border-bottom: 1px solid #333;
-  font-size: 13px;
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-.severity-badge {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  text-transform: uppercase;
-  flex-shrink: 0;
-}
-.diagnostic.error .severity-badge {
-  background: #ef4444;
-}
-.diagnostic.warning .severity-badge {
-  background: #f59e0b;
-  color: #000;
-}
-.message {
-  word-break: break-word;
-}
-</style>
