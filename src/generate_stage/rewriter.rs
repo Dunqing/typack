@@ -45,9 +45,6 @@ pub(super) struct SemanticRenamer<'a, 's> {
     pub allocator: &'a oxc_allocator::Allocator,
     pub scoping: &'s Scoping,
     pub renamed_symbols: &'s FxHashMap<oxc_syntax::symbol::SymbolId, String>,
-    /// Names shadowed by type parameters in the current scope (prevents incorrect
-    /// name-based fallback when `CloneIn` resets semantic IDs).
-    shadowed_names: FxHashSet<String>,
 }
 
 impl<'a, 's> SemanticRenamer<'a, 's> {
@@ -56,63 +53,13 @@ impl<'a, 's> SemanticRenamer<'a, 's> {
         scoping: &'s Scoping,
         renamed_symbols: &'s FxHashMap<oxc_syntax::symbol::SymbolId, String>,
     ) -> Self {
-        Self { allocator, scoping, renamed_symbols, shadowed_names: FxHashSet::default() }
-    }
-
-    /// Resolve a symbol by semantic ID with name-based fallback for cloned ASTs,
-    /// but only when the name is not shadowed by a type parameter.
-    fn resolve_binding_symbol(
-        &self,
-        name: &str,
-        symbol_id: Option<oxc_syntax::symbol::SymbolId>,
-    ) -> Option<oxc_syntax::symbol::SymbolId> {
-        symbol_id.or_else(|| {
-            if self.shadowed_names.contains(name) {
-                None
-            } else {
-                self.scoping.get_root_binding(Ident::from(name))
-            }
-        })
+        Self { allocator, scoping, renamed_symbols }
     }
 }
 
 impl<'a> VisitMut<'a> for SemanticRenamer<'a, '_> {
-    fn visit_declaration(&mut self, it: &mut Declaration<'a>) {
-        // Collect type parameter names from declarations so they shadow root bindings
-        // for the entire declaration body (not just the type parameter list).
-        let type_params: Option<&oxc_ast::ast::TSTypeParameterDeclaration<'a>> = match it {
-            Declaration::TSTypeAliasDeclaration(d) => d.type_parameters.as_deref(),
-            Declaration::TSInterfaceDeclaration(d) => d.type_parameters.as_deref(),
-            Declaration::ClassDeclaration(d) => d.type_parameters.as_deref(),
-            Declaration::FunctionDeclaration(d) => d.type_parameters.as_deref(),
-            _ => None,
-        };
-        let added: Vec<String> = type_params
-            .into_iter()
-            .flat_map(|tp| tp.params.iter())
-            .filter(|p| !self.shadowed_names.contains(p.name.name.as_str()))
-            .map(|p| p.name.name.to_string())
-            .collect();
-        for name in &added {
-            self.shadowed_names.insert(name.clone());
-        }
-        walk_mut::walk_declaration(self, it);
-        for name in &added {
-            self.shadowed_names.remove(name);
-        }
-    }
-
-    fn visit_ts_mapped_type(&mut self, it: &mut oxc_ast::ast::TSMappedType<'a>) {
-        let name = it.key.name.to_string();
-        let was_new = self.shadowed_names.insert(name.clone());
-        walk_mut::walk_ts_mapped_type(self, it);
-        if was_new {
-            self.shadowed_names.remove(&name);
-        }
-    }
-
     fn visit_binding_identifier(&mut self, ident: &mut oxc_ast::ast::BindingIdentifier<'a>) {
-        if let Some(symbol_id) = self.resolve_binding_symbol(&ident.name, ident.symbol_id.get())
+        if let Some(symbol_id) = ident.symbol_id.get()
             && let Some(new_name) = self.renamed_symbols.get(&symbol_id)
         {
             ident.name = Ident::from_in(new_name.as_str(), self.allocator);
@@ -120,9 +67,8 @@ impl<'a> VisitMut<'a> for SemanticRenamer<'a, '_> {
     }
 
     fn visit_identifier_reference(&mut self, ident: &mut oxc_ast::ast::IdentifierReference<'a>) {
-        let symbol_id =
-            ident.reference_id.get().and_then(|r| self.scoping.get_reference(r).symbol_id());
-        if let Some(symbol_id) = self.resolve_binding_symbol(&ident.name, symbol_id)
+        if let Some(ref_id) = ident.reference_id.get()
+            && let Some(symbol_id) = self.scoping.get_reference(ref_id).symbol_id()
             && let Some(new_name) = self.renamed_symbols.get(&symbol_id)
         {
             ident.name = Ident::from_in(new_name.as_str(), self.allocator);
@@ -484,13 +430,7 @@ fn resolve_type_name_root_symbol(
 ) -> Option<SymbolId> {
     match type_name {
         TSTypeName::IdentifierReference(ident) => {
-            // Try reference_id first; fall back to name-based lookup for cloned ASTs
-            // where CloneIn resets Cell values to None.
-            ident
-                .reference_id
-                .get()
-                .and_then(|r| scoping.get_reference(r).symbol_id())
-                .or_else(|| scoping.get_root_binding(Ident::from(ident.name.as_str())))
+            ident.reference_id.get().and_then(|r| scoping.get_reference(r).symbol_id())
         }
         TSTypeName::QualifiedName(qualified) => {
             resolve_type_name_root_symbol(&qualified.left, scoping)
@@ -501,11 +441,9 @@ fn resolve_type_name_root_symbol(
 
 fn resolve_expression_root_symbol(expr: &Expression<'_>, scoping: &Scoping) -> Option<SymbolId> {
     match expr {
-        Expression::Identifier(ident) => ident
-            .reference_id
-            .get()
-            .and_then(|r| scoping.get_reference(r).symbol_id())
-            .or_else(|| scoping.get_root_binding(Ident::from(ident.name.as_str()))),
+        Expression::Identifier(ident) => {
+            ident.reference_id.get().and_then(|r| scoping.get_reference(r).symbol_id())
+        }
         Expression::StaticMemberExpression(member) => {
             resolve_expression_root_symbol(&member.object, scoping)
         }
