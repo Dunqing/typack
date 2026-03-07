@@ -77,30 +77,39 @@ Useful for incremental adoption where not all dependencies have proper `.d.ts` f
 
 ---
 
+### 9. UMD `export as namespace` Wrapping
+
+**Current:** No support for UMD global namespace output.
+**Proposed:** A `--umd-module-name <NAME>` option to append `export as namespace <NAME>` to the output.
+
+`dts-bundle-generator` supports `umdModuleName` for libraries that expose a global UMD namespace. This is needed for libraries consumed via `<script>` tags.
+
+---
+
 ## Lower Priority (Nice to Have)
 
-### 9. Output Validation
+### 10. Output Validation
 
 **Current:** No post-bundle validation.
 **Proposed:** Optionally re-parse the output `.d.ts` to verify it's syntactically valid TypeScript.
 
 This would catch subtle codegen bugs early. Could be a `--validate` flag or an internal debug assertion.
 
-### 10. Inline Node Modules Types
+### 11. Inline Node Modules Types
 
 **Current:** `node_modules` dependencies are always kept external.
 **Proposed:** An `--inline` option (inverse of `--external`) to inline type definitions from specific `node_modules` packages.
 
 `dts-bundle-generator` supports `--external-inlines` for this. It's useful when a dependency's types are small and you want a self-contained `.d.ts` with zero external dependencies.
 
-### 11. JSON/Diagnostic Output Mode
+### 12. JSON/Diagnostic Output Mode
 
 **Current:** Warnings and errors are printed as human-readable text to stderr.
 **Proposed:** A `--format json` flag to output structured diagnostics as JSON.
 
 Useful for IDE integrations, CI pipelines, and programmatic consumers that need machine-parseable output.
 
-### 12. Preserve/Strip Comment Options
+### 13. Preserve/Strip Comment Options
 
 **Current:** Comments are preserved as-is from the input.
 **Proposed:** Options to control comment handling: `--strip-comments` to remove all comments, or `--preserve-jsdoc` to keep only JSDoc comments while stripping others.
@@ -113,7 +122,7 @@ Useful for IDE integrations, CI pipelines, and programmatic consumers that need 
 
 | Feature | Priority | Effort | Comparable Tool |
 |---------|----------|--------|----------------|
-| Glob-based external | High | Low | dts-bundle-generator |
+| Glob-based external | High | Low | api-extractor, dts-bundle-generator |
 | Config file support | High | Medium | all tools |
 | Multiple output files | High | Medium | dts-bundle-generator, rollup-plugin-dts |
 | tsconfig paths resolution | High | Low | dts-bundle-generator, rollup-plugin-dts |
@@ -121,7 +130,8 @@ Useful for IDE integrations, CI pipelines, and programmatic consumers that need 
 | Banner/footer | Medium | Low | tsup, rollup |
 | Watch mode | Medium | Medium | dts-bundle-generator |
 | Lenient mode | Medium | Low | — |
-| Output validation | Low | Low | — |
-| Inline node_modules types | Low | Medium | dts-bundle-generator |
+| UMD namespace wrapping | Medium | Low | dts-bundle-generator |
+| Output validation | Low | Low | dts-bundle-generator |
+| Inline node_modules types | Low | Medium | api-extractor, dts-bundle-generator, tsup |
 | JSON diagnostic output | Low | Low | — |
 | Comment control | Low | Low | dts-bundle-generator |
