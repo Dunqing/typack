@@ -3,6 +3,9 @@ import loader from "@monaco-editor/loader";
 import { ref, watch, onMounted, onBeforeUnmount, nextTick, computed } from "vue";
 
 import type { FileEntry } from "../composables/useFiles";
+import { useTheme } from "../composables/useTheme";
+
+const { monacoTheme } = useTheme();
 
 const props = defineProps<{
   files: FileEntry[];
@@ -102,7 +105,7 @@ onMounted(async () => {
   const activeUri = monaco.Uri.parse(`file:///${props.activeFile}`);
   editor = monaco.editor.create(editorContainer.value, {
     model: monaco.editor.getModel(activeUri),
-    theme: "vs-dark",
+    theme: monacoTheme.value,
     minimap: { enabled: false },
     fontSize: 13,
     lineNumbers: "on",
@@ -127,6 +130,11 @@ onBeforeUnmount(() => {
       model.dispose();
     }
   }
+});
+
+// Watch for theme changes and update Monaco
+watch(monacoTheme, (theme) => {
+  monaco?.editor.setTheme(theme);
 });
 
 function currentContent(): string {
@@ -195,20 +203,26 @@ function finishRename(oldName: string) {
 </script>
 
 <template>
-  <div class="editor-panel">
-    <div class="tabs">
+  <div class="flex h-full flex-col">
+    <div
+      class="flex shrink-0 overflow-x-auto border-b border-slate-300 bg-slate-100 dark:border-neutral-700 dark:bg-neutral-900"
+    >
       <div
         v-for="file in files"
         :key="file.name"
-        class="tab"
-        :class="{ active: file.name === activeFile }"
+        class="flex cursor-pointer items-center gap-1.5 border-r border-slate-300 px-3 py-1.5 text-xs whitespace-nowrap dark:border-neutral-700"
+        :class="
+          file.name === activeFile
+            ? 'border-b-2 border-b-blue-500 bg-white text-slate-900 dark:bg-neutral-900 dark:text-white'
+            : 'bg-slate-200 text-slate-500 dark:bg-neutral-800 dark:text-neutral-500'
+        "
         @click="emit('update:active-file', file.name)"
         @dblclick="startRename(file.name)"
       >
         <template v-if="editingTab === file.name">
           <input
             v-model="editInput"
-            class="tab-input"
+            class="w-32 border border-blue-500 bg-slate-200 px-1 py-px text-xs text-slate-900 outline-none dark:bg-neutral-700 dark:text-white"
             @blur="finishRename(file.name)"
             @keyup.enter="finishRename(file.name)"
             @keyup.escape="editingTab = null"
@@ -217,87 +231,23 @@ function finishRename(oldName: string) {
           />
         </template>
         <template v-else>
-          <span class="tab-name">{{ file.name }}</span>
+          <span>{{ file.name }}</span>
           <button
             v-if="files.length > 1"
-            class="tab-close"
+            class="cursor-pointer border-none bg-transparent px-0.5 text-sm leading-none text-slate-400 hover:text-slate-900 dark:text-neutral-600 dark:hover:text-white"
             @click.stop="emit('remove-file', file.name)"
           >
             &times;
           </button>
         </template>
       </div>
-      <button class="tab add-tab" @click="emit('add-file')">+</button>
+      <button
+        class="cursor-pointer border-none bg-transparent px-3 py-1.5 text-base text-slate-400 hover:text-slate-900 dark:text-neutral-600 dark:hover:text-white"
+        @click="emit('add-file')"
+      >
+        +
+      </button>
     </div>
-    <div ref="editorContainer" class="editor-container" />
+    <div ref="editorContainer" class="flex-1" />
   </div>
 </template>
-
-<style scoped>
-.editor-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-.tabs {
-  display: flex;
-  background: #1e1e1e;
-  border-bottom: 1px solid #333;
-  overflow-x: auto;
-  flex-shrink: 0;
-}
-.tab {
-  display: flex;
-  align-items: center;
-  padding: 6px 12px;
-  color: #999;
-  cursor: pointer;
-  font-size: 12px;
-  border-right: 1px solid #333;
-  white-space: nowrap;
-  gap: 6px;
-}
-.tab.active {
-  color: #fff;
-  background: #1e1e1e;
-  border-bottom: 2px solid #3b82f6;
-}
-.tab:not(.active) {
-  background: #2d2d2d;
-}
-.tab-close {
-  background: none;
-  border: none;
-  color: #666;
-  cursor: pointer;
-  font-size: 14px;
-  padding: 0 2px;
-  line-height: 1;
-}
-.tab-close:hover {
-  color: #fff;
-}
-.add-tab {
-  color: #666;
-  font-size: 16px;
-  border: none;
-  background: none;
-  padding: 6px 12px;
-  cursor: pointer;
-}
-.add-tab:hover {
-  color: #fff;
-}
-.tab-input {
-  background: #333;
-  border: 1px solid #3b82f6;
-  color: #fff;
-  font-size: 12px;
-  padding: 1px 4px;
-  width: 120px;
-  outline: none;
-}
-.editor-container {
-  flex: 1;
-}
-</style>

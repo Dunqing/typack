@@ -1,0 +1,48 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Splitpanes overrides (must be global — targets library class names) */
+.splitpanes__pane {
+  display: flex;
+  flex-direction: column;
+  background: white;
+}
+
+:root.dark .splitpanes__pane {
+  background: var(--color-neutral-900);
+}
+
+.splitpanes__splitter {
+  position: relative;
+}
+
+.default-theme .splitpanes__splitter {
+  min-width: 4px;
+}
+
+:root .splitpanes__splitter {
+  background: var(--color-slate-300);
+}
+
+:root.dark .splitpanes__splitter {
+  background: var(--color-neutral-700);
+}
+
+:root.dark .default-theme .splitpanes--vertical > .splitpanes__splitter {
+  border-left-color: var(--color-neutral-700);
+}
+
+:root.dark .default-theme .splitpanes--horizontal > .splitpanes__splitter {
+  border-top-color: var(--color-neutral-700);
+}

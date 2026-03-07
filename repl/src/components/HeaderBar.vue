@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import type { FileEntry } from "../composables/useFiles";
+import { useTheme } from "../composables/useTheme";
+
+const { isDark, toggle } = useTheme();
 
 const props = defineProps<{
   loading: boolean;
@@ -22,22 +25,37 @@ function reportBug() {
     "repl-link": replLink,
   });
 
-  window.open(`https://github.com/Dunqing/typack/issues/new?${params.toString()}`, "_blank", "noopener,noreferrer");
+  window.open(
+    `https://github.com/Dunqing/typack/issues/new?${params.toString()}`,
+    "_blank",
+    "noopener,noreferrer",
+  );
 }
 </script>
 
 <template>
-  <header class="header">
-    <div class="header-left">
-      <h1 class="title">Typack REPL</h1>
-      <span v-if="!ready" class="status loading">Loading WASM...</span>
-      <span v-else-if="loading" class="status bundling">Bundling...</span>
-      <span v-else class="status ready"
-        >Ready<template v-if="bundleTime > 0"> · {{ bundleTime }}ms</template></span
+  <header
+    class="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 py-2 text-slate-800 sm:px-4 dark:border-neutral-700 dark:bg-neutral-900 dark:text-slate-100"
+  >
+    <div class="flex min-w-0 items-center gap-2 sm:gap-3">
+      <h1 class="shrink-0 text-sm font-semibold sm:text-base">Typack REPL</h1>
+      <span v-if="!ready" class="rounded bg-amber-400 px-2 py-0.5 text-xs text-black"
+        >Loading WASM...</span
       >
+      <span v-else-if="loading" class="rounded bg-blue-500 px-2 py-0.5 text-xs text-white"
+        >Bundling...</span
+      >
+      <span v-else class="rounded bg-green-500 px-2 py-0.5 text-xs text-black">
+        Ready<template v-if="bundleTime > 0"> · {{ bundleTime }}ms</template>
+      </span>
     </div>
-    <div class="header-right">
-      <button type="button" class="report-bug" @click="reportBug" title="Report Bug">
+    <div class="flex items-center gap-2 sm:gap-3">
+      <button
+        type="button"
+        class="flex cursor-pointer items-center gap-1.5 rounded-md border border-slate-300 bg-transparent px-2 py-1 text-xs text-inherit transition-colors hover:border-slate-400 hover:bg-slate-200 sm:px-2.5 dark:border-slate-600 dark:hover:border-slate-500 dark:hover:bg-slate-700"
+        @click="reportBug"
+        title="Report Bug"
+      >
         <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
           <path
             d="M4.72.22a.75.75 0 0 1 1.06 0l1 .999a3.49 3.49 0 0 1 2.441 0l.999-1a.75.75 0 1 1
@@ -51,13 +69,57 @@ function reportBug() {
             0 0 1 4.72.22ZM6.173 5.98a2 2 0 1 0 3.654 0H6.173Z"
           />
         </svg>
-        Report Bug
+        <span class="hidden sm:inline">Report Bug</span>
+      </button>
+      <button
+        type="button"
+        class="flex cursor-pointer items-center opacity-70 transition-opacity hover:opacity-100"
+        @click="toggle"
+        :title="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
+        :aria-label="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
+      >
+        <!-- Sun icon (shown in dark mode) -->
+        <svg
+          v-if="isDark"
+          viewBox="0 0 24 24"
+          width="20"
+          height="20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5" />
+          <line x1="12" y1="1" x2="12" y2="3" />
+          <line x1="12" y1="21" x2="12" y2="23" />
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+          <line x1="1" y1="12" x2="3" y2="12" />
+          <line x1="21" y1="12" x2="23" y2="12" />
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+        </svg>
+        <!-- Moon icon (shown in light mode) -->
+        <svg
+          v-else
+          viewBox="0 0 24 24"
+          width="20"
+          height="20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
       </button>
       <a
         href="https://github.com/Dunqing/typack"
         target="_blank"
         rel="noopener noreferrer"
-        class="github-link"
+        class="flex items-center opacity-70 transition-opacity hover:opacity-100"
         title="View on GitHub"
       >
         <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor">
@@ -75,86 +137,3 @@ function reportBug() {
     </div>
   </header>
 </template>
-
-<style scoped>
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  background: #1e293b;
-  color: #f1f5f9;
-  height: 48px;
-  flex-shrink: 0;
-}
-
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.title {
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.status {
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 4px;
-}
-
-.status.loading {
-  background: #f59e0b;
-  color: #000;
-}
-
-.status.bundling {
-  background: #3b82f6;
-}
-
-.status.ready {
-  background: #22c55e;
-  color: #000;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.report-bug {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border: 1px solid #475569;
-  border-radius: 6px;
-  background: transparent;
-  color: #f1f5f9;
-  font-size: 12px;
-  cursor: pointer;
-  transition:
-    background 0.15s,
-    border-color 0.15s;
-}
-
-.report-bug:hover {
-  background: #334155;
-  border-color: #64748b;
-}
-
-.github-link {
-  color: #f1f5f9;
-  opacity: 0.7;
-  transition: opacity 0.15s;
-  display: flex;
-  align-items: center;
-}
-
-.github-link:hover {
-  opacity: 1;
-}
-</style>

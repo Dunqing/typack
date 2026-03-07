@@ -37,7 +37,10 @@ export function useTypack() {
       // Guard against re-patching (e.g. HMR).
       if (!(TextDecoder.prototype as any).__typack_patched) {
         const origDecode = TextDecoder.prototype.decode;
-        TextDecoder.prototype.decode = function (input?: BufferSource, options?: TextDecodeOptions) {
+        TextDecoder.prototype.decode = function (
+          input?: BufferSource,
+          options?: TextDecodeOptions,
+        ) {
           if (input && (input as any).buffer instanceof SharedArrayBuffer) {
             const view = input as ArrayBufferView;
             input = new Uint8Array(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));

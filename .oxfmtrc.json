@@ -1,5 +1,8 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "sortImports": {},
+  "sortTailwindcss": {
+    "stylesheet": "./repl/src/style.css"
+  },
   "ignorePatterns": ["tests"]
 }
