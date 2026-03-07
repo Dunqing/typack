@@ -79,7 +79,6 @@ pub(super) struct GenerateSharedCtx<'s> {
     pub(super) rename_plan: &'s RenamePlan,
     pub(super) needed_symbol_kinds:
         &'s FxHashMap<ModuleIdx, Option<FxHashMap<SymbolId, NeededKindFlags>>>,
-    pub(super) implicit_whole_fallbacks: &'s FxHashSet<ModuleIdx>,
     pub(super) default_export_names: &'s FxHashMap<ModuleIdx, String>,
     pub(super) helper_reserved_names: &'s FxHashSet<String>,
 }

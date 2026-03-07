@@ -8,20 +8,6 @@ use rustc_hash::FxHashSet;
 use crate::scan_stage::ScanResult;
 use crate::types::{ExportSource, Module, ModuleIdx};
 
-/// Collect exported *declaration* names from a module (e.g. `export interface Foo {}`).
-///
-/// Only considers `export <declaration>` patterns — does NOT include specifier-based
-/// exports (`export { X }`) or `export default`. Used by needed-names propagation
-/// to determine what names a star-export source actually declares.
-/// See also [`collect_all_exported_names`] for the broader variant.
-pub(super) fn collect_exported_names_from_program(
-    module_idx: ModuleIdx,
-    scan_result: &ScanResult<'_>,
-) -> FxHashSet<String> {
-    let info = &scan_result.modules[module_idx].export_import_info;
-    info.declared_export_names.iter().cloned().collect()
-}
-
 /// Collect all exported names from a module, including both declaration exports
 /// and specifier-based exports (`export { X }`, `export { X as Y }`).
 /// Returns the LOCAL names (the names used in declarations within the module).
@@ -48,6 +34,28 @@ pub fn collect_all_exported_names(
                     .get("default")
                     .is_some_and(|e| !matches!(e.source, ExportSource::Default))
         })
+        .collect()
+}
+
+/// Collect the PUBLIC exported names from a module.
+///
+/// Unlike [`collect_all_exported_names`], this returns the outward-facing export names,
+/// so `export { Internal as Public }` contributes `Public`.
+pub fn collect_public_exported_names(
+    module_idx: ModuleIdx,
+    scan_result: &ScanResult<'_>,
+) -> FxHashSet<String> {
+    let info = &scan_result.modules[module_idx].export_import_info;
+    info.named_exports
+        .keys()
+        .filter(|name| {
+            name.as_str() != "default"
+                || info
+                    .named_exports
+                    .get("default")
+                    .is_some_and(|e| !matches!(e.source, ExportSource::Default))
+        })
+        .cloned()
         .collect()
 }
 
@@ -91,6 +99,54 @@ pub fn resolve_export_local_name(module: &Module<'_>, exported_name: &str) -> Op
         // Source re-exports don't have a local declaration in this module
         ExportSource::SourceReexport { .. } => None,
     }
+}
+
+/// Resolve an exported name through internal re-export chains to the module and local name
+/// that ultimately declares it.
+pub fn resolve_export_origin(
+    module_idx: ModuleIdx,
+    exported_name: &str,
+    scan_result: &ScanResult<'_>,
+) -> Option<(ModuleIdx, String)> {
+    fn inner(
+        module_idx: ModuleIdx,
+        exported_name: &str,
+        scan_result: &ScanResult<'_>,
+        seen: &mut FxHashSet<(ModuleIdx, String)>,
+    ) -> Option<(ModuleIdx, String)> {
+        if !seen.insert((module_idx, exported_name.to_string())) {
+            return None;
+        }
+
+        let module = &scan_result.modules[module_idx];
+        if let Some(entry) = module.export_import_info.named_exports.get(exported_name) {
+            return match &entry.source {
+                ExportSource::LocalDeclaration
+                | ExportSource::LocalReexport
+                | ExportSource::Default => Some((module_idx, entry.local_name.clone())),
+                ExportSource::SourceReexport { specifier, imported_name } => {
+                    let target_idx = module.resolve_internal_specifier(specifier)?;
+                    inner(target_idx, imported_name, scan_result, seen)
+                }
+            };
+        }
+
+        for star in &module.export_import_info.star_reexports {
+            if star.alias.is_some() {
+                continue;
+            }
+            let Some(target_idx) = module.resolve_internal_specifier(&star.specifier) else {
+                continue;
+            };
+            if let Some(origin) = inner(target_idx, exported_name, scan_result, seen) {
+                return Some(origin);
+            }
+        }
+
+        None
+    }
+
+    inner(module_idx, exported_name, scan_result, &mut FxHashSet::default())
 }
 
 /// Resolve the name of a module's default export.

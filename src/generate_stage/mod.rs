@@ -19,7 +19,7 @@ use oxc_allocator::{Allocator, TakeIn};
 use oxc_ast::AstBuilder;
 use oxc_ast::ast::{
     ExportDefaultDeclaration, ExportDefaultDeclarationKind, IdentifierReference, Statement,
-    TSModuleReference, TSType, TSTypeName, TSTypeQuery, TSTypeQueryExprName,
+    TSTypeName, TSTypeQuery,
 };
 use oxc_ast_visit::{Visit, VisitMut};
 use oxc_codegen::{Codegen, CodegenOptions, IndentChar};
@@ -30,7 +30,9 @@ use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::helpers::collect_decl_names;
-use crate::link_stage::exports::{find_external_reexport_source, resolve_export_local_name};
+use crate::link_stage::exports::{
+    find_external_reexport_source, resolve_export_local_name, resolve_export_origin,
+};
 use crate::link_stage::{NeededKindFlags, RenamePlan, build_link_output};
 use crate::scan_stage::ScanResult;
 use crate::types::{Module, ModuleIdx};
@@ -110,17 +112,12 @@ impl<'a> GenerateStage<'a> {
         for wrap in namespace_wraps.values() {
             helper_reserved_names.insert(wrap.namespace_name.clone());
         }
-        let implicit_whole_fallbacks = collect_implicit_whole_module_fallbacks(
-            &*self.scan_result,
-            &link_output.needed_names_plan.symbol_kinds,
-        );
 
         let shared = GenerateSharedCtx {
             namespace_wraps: &namespace_wraps,
             namespace_aliases: &namespace_aliases,
             rename_plan: &link_output.rename_plan,
             needed_symbol_kinds: &link_output.needed_names_plan.symbol_kinds,
-            implicit_whole_fallbacks: &implicit_whole_fallbacks,
             default_export_names: &link_output.default_export_names,
             helper_reserved_names: &helper_reserved_names,
         };
@@ -239,11 +236,7 @@ impl<'a> GenerateStage<'a> {
         } else {
             match shared.needed_symbol_kinds.get(&module_idx) {
                 Some(entry) => (true, entry.clone()),
-                None => (
-                    module_has_augmentation
-                        || shared.implicit_whole_fallbacks.contains(&module_idx),
-                    None,
-                ),
+                None => (module_has_augmentation, None),
             }
         };
 
@@ -706,14 +699,17 @@ impl<'a> GenerateStage<'a> {
                             let exported_name = spec.exported.name().to_string();
                             if let Some(source_module_idx) = internal_source_idx {
                                 let mut local_name = spec.local.name().to_string();
+                                let mut local_module_idx = source_module_idx;
                                 // Resolve through the source module's export aliases:
                                 // e.g. source has `export { createBaseVNode as createElementVNode }`,
                                 // map "createElementVNode" → "createBaseVNode"
-                                if let Some(resolved) = resolve_export_local_name(
-                                    &self.scan_result.modules[source_module_idx],
+                                if let Some((origin_module_idx, resolved)) = resolve_export_origin(
+                                    source_module_idx,
                                     &local_name,
+                                    self.scan_result,
                                 ) {
                                     local_name = resolved;
+                                    local_module_idx = origin_module_idx;
                                 } else if let Some((ext_source, imported_name)) =
                                     find_external_reexport_source(
                                         source_module_idx,
@@ -740,12 +736,12 @@ impl<'a> GenerateStage<'a> {
                                 }
                                 if local_name == "default"
                                     && let Some(name) =
-                                        shared.default_export_names.get(&source_module_idx)
+                                        shared.default_export_names.get(&local_module_idx)
                                 {
                                     local_name.clone_from(name);
                                 }
                                 if let Some(new_name) = shared.rename_plan.resolve_name(
-                                    &self.scan_result.modules[source_module_idx],
+                                    &self.scan_result.modules[local_module_idx],
                                     &local_name,
                                 ) {
                                     local_name = new_name.to_string();
@@ -1083,132 +1079,6 @@ fn export_default_declaration_matches_needed_kinds(
     let decl_kinds = decl_kinds
         .intersection(NeededKindFlags::from_symbol_flags(scoping.symbol_flags(symbol_id)));
     decl_kinds.is_empty() || needed.get(&symbol_id).is_some_and(|k| k.intersects(decl_kinds))
-}
-
-fn statement_is_retained_for_implicit_fallback(
-    stmt: &Statement<'_>,
-    module: &Module<'_>,
-    needed: Option<&FxHashMap<SymbolId, NeededKindFlags>>,
-) -> bool {
-    let Some(needed) = needed else {
-        return true;
-    };
-
-    match stmt {
-        Statement::ExportNamedDeclaration(export_decl) => export_decl
-            .declaration
-            .as_ref()
-            .is_none_or(|decl| declaration_matches_needed_kinds(decl, &module.scoping, needed)),
-        Statement::ExportDefaultDeclaration(export_default) => {
-            export_default_declaration_matches_needed_kinds(export_default, &module.scoping, needed)
-        }
-        Statement::TSImportEqualsDeclaration(_) => true,
-        _ => stmt
-            .as_declaration()
-            .is_none_or(|decl| declaration_matches_needed_kinds(decl, &module.scoping, needed)),
-    }
-}
-
-fn collect_implicit_whole_module_fallbacks(
-    scan_result: &ScanResult<'_>,
-    needed_symbol_kinds: &FxHashMap<ModuleIdx, Option<FxHashMap<SymbolId, NeededKindFlags>>>,
-) -> FxHashSet<ModuleIdx> {
-    let mut fallback_modules = FxHashSet::default();
-
-    for target in &scan_result.modules {
-        let needs_fallback = scan_result.modules.iter().any(|module| {
-            if module.idx == target.idx {
-                return false;
-            }
-
-            let needed = if module.is_entry {
-                Some(None)
-            } else {
-                match needed_symbol_kinds.get(&module.idx) {
-                    Some(entry) => Some(entry.as_ref()),
-                    None if module.has_augmentation => Some(None),
-                    None => None,
-                }
-            };
-            let Some(needed) = needed else {
-                return false;
-            };
-
-            module.program.body.iter().any(|stmt| {
-                if !statement_is_retained_for_implicit_fallback(stmt, module, needed) {
-                    return false;
-                }
-
-                let mut collector = ImplicitWholeModuleFallbackCollector {
-                    module,
-                    target_idx: target.idx,
-                    found: false,
-                };
-                collector.visit_statement(stmt);
-                collector.found
-            })
-        });
-
-        if needs_fallback {
-            fallback_modules.insert(target.idx);
-        }
-    }
-
-    fallback_modules
-}
-
-struct ImplicitWholeModuleFallbackCollector<'m, 'a> {
-    module: &'m Module<'a>,
-    target_idx: ModuleIdx,
-    found: bool,
-}
-
-impl<'a> Visit<'a> for ImplicitWholeModuleFallbackCollector<'_, 'a> {
-    fn visit_ts_type(&mut self, it: &TSType<'a>) {
-        if self.found {
-            return;
-        }
-        if let TSType::TSImportType(import_type) = it
-            && import_type.qualifier.is_some()
-            && self.module.resolve_internal_specifier(import_type.source.value.as_str())
-                == Some(self.target_idx)
-        {
-            self.found = true;
-            return;
-        }
-        oxc_ast_visit::walk::walk_ts_type(self, it);
-    }
-
-    fn visit_ts_type_query(&mut self, it: &TSTypeQuery<'a>) {
-        if self.found {
-            return;
-        }
-        if let TSTypeQueryExprName::TSImportType(import_type) = &it.expr_name
-            && self.module.resolve_internal_specifier(import_type.source.value.as_str())
-                == Some(self.target_idx)
-        {
-            self.found = true;
-            return;
-        }
-        oxc_ast_visit::walk::walk_ts_type_query(self, it);
-    }
-
-    fn visit_ts_import_equals_declaration(
-        &mut self,
-        decl: &oxc_ast::ast::TSImportEqualsDeclaration<'a>,
-    ) {
-        if self.found {
-            return;
-        }
-        if let TSModuleReference::ExternalModuleReference(ext) = &decl.module_reference
-            && self.module.resolve_internal_specifier(ext.expression.value.as_str())
-                == Some(self.target_idx)
-        {
-            self.found = true;
-            return;
-        }
-        oxc_ast_visit::walk::walk_ts_import_equals_declaration(self, decl);
-    }
 }
 
 /// Apply semantic renames to the transformed AST body.
