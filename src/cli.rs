@@ -3,7 +3,7 @@
 #![expect(clippy::print_stdout, clippy::print_stderr, clippy::exit)]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use bpaf::{Args, Bpaf};
 
@@ -115,12 +115,10 @@ pub fn run_cli(args: &[String]) -> ! {
                     let entry_path = PathBuf::from(entry);
                     // Preserve relative directory structure under outdir;
                     // fall back to just the filename if the entry is outside cwd
-                    let relative = entry_path
-                        .strip_prefix(&options.cwd)
-                        .map(|p| p.to_path_buf())
-                        .unwrap_or_else(|_| {
-                            entry_path.file_name().map(PathBuf::from).unwrap_or(entry_path.clone())
-                        });
+                    let relative = entry_path.strip_prefix(&options.cwd).map_or_else(
+                        |_| entry_path.file_name().map(PathBuf::from).unwrap_or(entry_path.clone()),
+                        Path::to_path_buf,
+                    );
                     let stem = relative
                         .file_stem()
                         .unwrap_or_else(|| relative.as_os_str())

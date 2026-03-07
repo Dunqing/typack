@@ -83,10 +83,10 @@ match result {
 
 **`BundleResult`**
 
-| Field      | Type                 | Description                         |
-| ---------- | -------------------- | ----------------------------------- |
-| `outputs`  | `Vec<BundleOutput>`  | Per-entry bundled outputs           |
-| `warnings` | `Vec<OxcDiagnostic>` | Non-fatal warnings                  |
+| Field      | Type                 | Description               |
+| ---------- | -------------------- | ------------------------- |
+| `outputs`  | `Vec<BundleOutput>`  | Per-entry bundled outputs |
+| `warnings` | `Vec<OxcDiagnostic>` | Non-fatal warnings        |
 
 **`BundleOutput`**
 

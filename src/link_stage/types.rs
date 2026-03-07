@@ -85,6 +85,7 @@ pub struct NeededNamesPlan {
     pub symbol_kinds: FxHashMap<ModuleIdx, Option<FxHashMap<SymbolId, NeededKindFlags>>>,
     /// Diagnostic info: why each name was determined to be needed (for testing/debugging).
     /// Only read in tests via `reasons_for()`.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub reasons: FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
 }
 
