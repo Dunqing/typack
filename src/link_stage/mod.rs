@@ -8,13 +8,13 @@ pub mod resolved_exports;
 mod types;
 mod warnings;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::scan_stage::ScanResult;
 use crate::types::ModuleIdx;
 
 pub use exports::{collect_all_exported_names, resolve_default_export_name};
-pub use needed_names::build_needed_names;
+pub use needed_names::{build_needed_names, compute_entry_needed_symbols};
 pub use rename::build_rename_plan;
 pub use resolved_exports::build_resolved_exports;
 pub use types::NeededKindFlags;
@@ -34,9 +34,27 @@ pub fn build_link_output_for_entry(
     rename_plan: RenamePlan,
 ) -> LinkOutput {
     let mut needed_names_plan = build_needed_names(&scan_result.modules[entry_idx], scan_result);
-    // Keep the entry module whole (no tree-shaking within the entry itself).
-    needed_names_plan.map.insert(entry_idx, None);
-    needed_names_plan.symbol_kinds.insert(entry_idx, None);
+
+    // Compute only the symbols the entry actually needs (exports + augmentation
+    // refs + semantic deps) instead of keeping everything.
+    let entry = &scan_result.modules[entry_idx];
+    let (entry_needed, entry_kinds) = compute_entry_needed_symbols(entry, scan_result);
+
+    let map_entry =
+        needed_names_plan.map.entry(entry_idx).or_insert_with(|| Some(FxHashSet::default()));
+    if let Some(set) = map_entry {
+        set.extend(entry_needed);
+    }
+
+    let kinds_entry = needed_names_plan
+        .symbol_kinds
+        .entry(entry_idx)
+        .or_insert_with(|| Some(FxHashMap::default()));
+    if let Some(existing_kinds) = kinds_entry {
+        for (sym, kind) in entry_kinds {
+            existing_kinds.entry(sym).and_modify(|k| *k = k.union(kind)).or_insert(kind);
+        }
+    }
 
     let mut default_export_names: FxHashMap<ModuleIdx, String> = FxHashMap::default();
     for module in &scan_result.modules {
@@ -96,11 +114,25 @@ fn build_merged_needed_names(scan_result: &ScanResult<'_>) -> NeededNamesPlan {
         }
     }
 
-    // Entry modules must stay whole even when they are pulled in as
-    // dependencies of another entry in a multi-entry build.
+    // For each entry module, compute its needed symbols (exported + semantic
+    // deps) and merge with any existing needed set (the entry may also appear
+    // as a dependency of another entry in a multi-entry build).
     for &entry_idx in &scan_result.entry_indices {
-        merged.map.insert(entry_idx, None);
-        merged.symbol_kinds.insert(entry_idx, None);
+        let entry = &scan_result.modules[entry_idx];
+        let (entry_needed, entry_kinds) = compute_entry_needed_symbols(entry, scan_result);
+
+        let map_entry = merged.map.entry(entry_idx).or_insert_with(|| Some(FxHashSet::default()));
+        if let Some(set) = map_entry {
+            set.extend(entry_needed);
+        }
+
+        let kinds_entry =
+            merged.symbol_kinds.entry(entry_idx).or_insert_with(|| Some(FxHashMap::default()));
+        if let Some(existing_kinds) = kinds_entry {
+            for (sym, kind) in entry_kinds {
+                existing_kinds.entry(sym).and_modify(|k| *k = k.union(kind)).or_insert(kind);
+            }
+        }
     }
 
     merged
@@ -348,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn merged_needed_names_keep_secondary_entries_whole() {
+    fn merged_needed_names_keep_secondary_entries_exported_symbols() {
         let project = TempProject::new("merged_needed_names_keep_entries");
         project.write_file(
             "a.d.ts",
@@ -370,7 +402,10 @@ mod tests {
         let b_idx =
             scan_result.modules[a_idx].resolve_internal_specifier("./b").expect("b should resolve");
 
-        assert!(matches!(merged.map.get(&b_idx), Some(None)));
+        // Entry b exports both B and x; both should be in the needed set.
+        let b_module = &scan_result.modules[b_idx];
+        assert!(merged.contains_symbol(b_module, "B"));
+        assert!(merged.contains_symbol(b_module, "x"));
     }
 
     #[test]

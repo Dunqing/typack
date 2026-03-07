@@ -16,7 +16,8 @@ use crate::scan_stage::ScanResult;
 use crate::types::{ExportSource, ImportBindingKind, Module, ModuleIdx};
 
 use super::exports::{
-    collect_all_exported_names, collect_public_exported_names, resolve_export_local_name,
+    collect_all_exported_names, collect_public_exported_names, resolve_default_export_name,
+    resolve_export_local_name,
 };
 use super::types::{NeededKindFlags, NeededNamesPlan, NeededReason};
 
@@ -445,6 +446,60 @@ fn propagate_entry_retained_dependencies(
             }
         }
     }
+}
+
+/// Compute the set of symbols that an entry module actually needs to keep.
+///
+/// Starts from the module's exported symbols (including default exports) and
+/// symbols referenced by module augmentations (`declare module '...' { }`),
+/// then expands via semantic dependencies (transitive references within the
+/// module).
+pub fn compute_entry_needed_symbols(
+    entry: &Module<'_>,
+    scan_result: &ScanResult<'_>,
+) -> (FxHashSet<SymbolId>, FxHashMap<SymbolId, NeededKindFlags>) {
+    let mut needed_symbols = FxHashSet::default();
+    // Seed from locally-sourced exports only. Re-exports (`export { X } from
+    // "./mod"`) do not have a local binding in this module, so looking them up
+    // by name could accidentally retain an unrelated local declaration that
+    // happens to share the same name.
+    for export_entry in entry.export_import_info.named_exports.values() {
+        if matches!(export_entry.source, ExportSource::SourceReexport { .. }) {
+            continue;
+        }
+        if let Some(symbol_id) =
+            entry.scoping.get_root_binding(Ident::from(export_entry.local_name.as_str()))
+        {
+            needed_symbols.insert(symbol_id);
+        }
+    }
+    // Also include the default export's local name (e.g. `export default class Foo {}`).
+    if let Some(default_name) = resolve_default_export_name(entry.idx, scan_result)
+        && let Some(symbol_id) = entry.scoping.get_root_binding(Ident::from(default_name.as_str()))
+    {
+        needed_symbols.insert(symbol_id);
+    }
+
+    // Augmentation blocks (`declare global { ... }` and `declare module '...' { ... }`)
+    // are always kept in the output. Include any root-scope symbols they reference
+    // so that those declarations survive tree-shaking.
+    let root_scope_id = entry.scoping.root_scope_id();
+    let root_symbols: FxHashSet<SymbolId> =
+        entry.scoping.get_bindings(root_scope_id).values().copied().collect();
+    let mut collector = RootReferenceCollector::new(&entry.scoping, &root_symbols);
+    for stmt in &entry.program.body {
+        if statement_is_always_retained(stmt) {
+            collector.visit_statement(stmt);
+        }
+    }
+    for (sym, _) in collector.finish() {
+        needed_symbols.insert(sym);
+    }
+
+    // Expand via semantic dependencies using the declaration graph.
+    let nodes = collect_declaration_nodes(entry, scan_result);
+    let expansion = expand_module_graph(entry, &nodes, Some(&needed_symbols), false, None);
+    (expansion.expanded_symbols, expansion.needed_symbols)
 }
 
 fn add_namespace_requirement(

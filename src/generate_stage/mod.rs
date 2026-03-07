@@ -238,13 +238,9 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         let (module_is_needed, module_needed): (
             bool,
             Option<FxHashMap<SymbolId, NeededKindFlags>>,
-        ) = if is_entry {
-            (true, None)
-        } else {
-            match shared.needed_symbol_kinds.get(&module_idx) {
-                Some(entry) => (true, entry.clone()),
-                None => (module_has_augmentation, None),
-            }
+        ) = match shared.needed_symbol_kinds.get(&module_idx) {
+            Some(entry) => (true, entry.clone()),
+            None => (module_has_augmentation, None),
         };
 
         if !module_is_needed {
