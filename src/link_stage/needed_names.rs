@@ -480,14 +480,7 @@ pub fn compute_entry_needed_symbols(
         entry.scoping.get_bindings(root_scope_id).values().copied().collect();
     let mut collector = RootReferenceCollector::new(&entry.scoping, &root_symbols);
     for stmt in &entry.program.body {
-        let is_augmentation = match stmt {
-            Statement::TSGlobalDeclaration(_) => true,
-            Statement::TSModuleDeclaration(module_decl) => {
-                matches!(module_decl.id, TSModuleDeclarationName::StringLiteral(_))
-            }
-            _ => false,
-        };
-        if is_augmentation {
+        if statement_is_always_retained(stmt) {
             collector.visit_statement(stmt);
         }
     }
