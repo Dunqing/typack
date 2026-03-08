@@ -6,7 +6,7 @@ use crate::scan_stage::ScanResult;
 
 use super::types::RenamePlan;
 
-pub(super) fn collect_link_warnings(
+pub fn collect_link_warnings(
     rename_plan: &RenamePlan,
     scan_result: &ScanResult<'_>,
 ) -> Vec<OxcDiagnostic> {
