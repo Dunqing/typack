@@ -15,7 +15,8 @@ use crate::scan_stage::ScanResult;
 use crate::types::ModuleIdx;
 
 use super::types::{
-    ExportedName, ExternalImport, ImportSpecifier, ImportSpecifierKind, NamespaceWrapInfo,
+    CachedModuleExports, ExportedName, ExternalImport, ImportSpecifier, ImportSpecifierKind,
+    NamespaceWrapInfo,
 };
 
 /// Collect exported names from a declaration for the consolidated `export { ... }` statement.
@@ -51,61 +52,68 @@ pub(super) fn collect_export_specifier(
     });
 }
 
-/// Recursively collect all exported names from a module.
-/// Handles `export * from "..."` transitively.
-/// Uses stored ASTs from the scan result instead of re-parsing.
-/// A `visited` set guards against infinite recursion from circular re-exports.
-pub(super) fn collect_module_exports(
-    module_idx: ModuleIdx,
-    exports: &mut Vec<ExportedName>,
+pub(super) fn build_module_exports_cache(
     scan_result: &ScanResult<'_>,
-    visited: &mut FxHashSet<ModuleIdx>,
-    mut external_imports: Option<&mut Vec<ExternalImport>>,
-) {
-    if !visited.insert(module_idx) {
-        return;
+) -> FxHashMap<ModuleIdx, CachedModuleExports> {
+    let mut cache = FxHashMap::default();
+    let mut visiting = FxHashSet::default();
+    for module in &scan_result.modules {
+        compute_module_exports(module.idx, scan_result, &mut cache, &mut visiting);
     }
+    cache
+}
+
+fn compute_module_exports(
+    module_idx: ModuleIdx,
+    scan_result: &ScanResult<'_>,
+    cache: &mut FxHashMap<ModuleIdx, CachedModuleExports>,
+    visiting: &mut FxHashSet<ModuleIdx>,
+) -> CachedModuleExports {
+    if let Some(cached) = cache.get(&module_idx) {
+        return cached.clone();
+    }
+    if !visiting.insert(module_idx) {
+        return CachedModuleExports::default();
+    }
+
     let module = &scan_result.modules[module_idx];
+    let mut export_names = Vec::new();
+    let mut external_imports = Vec::new();
 
     for stmt in &module.program.body {
         match stmt {
             Statement::ExportNamedDeclaration(decl) => {
                 if let Some(d) = &decl.declaration {
-                    collect_declaration_names(d, exports);
+                    collect_declaration_names(d, &mut export_names);
                 } else if let Some(source) = &decl.source {
-                    // Re-export: `export { X } from "..."`
-                    let source_is_external =
-                        module.resolve_internal_specifier(source.value.as_str()).is_none();
-                    for spec in &decl.specifiers {
-                        if source_is_external {
-                            // External: import creates the exported name as local binding
+                    if module.resolve_internal_specifier(source.value.as_str()).is_none() {
+                        for spec in &decl.specifiers {
                             let exported = spec.exported.name().to_string();
-                            exports.push(ExportedName {
+                            export_names.push(ExportedName {
                                 local: exported.clone(),
                                 exported: exported.clone(),
                                 is_type_only: false,
                             });
-                            if let Some(imports) = &mut external_imports {
-                                imports.push(ExternalImport {
-                                    source: source.value.to_string(),
-                                    specifiers: vec![ImportSpecifier {
-                                        local: exported,
-                                        kind: ImportSpecifierKind::Named(
-                                            spec.local.name().to_string(),
-                                        ),
-                                    }],
-                                    is_type_only: false,
-                                    side_effect_only: false,
-                                    from_reexport: true,
-                                });
-                            }
-                        } else {
-                            collect_export_specifier(spec, exports, false);
+                            external_imports.push(ExternalImport {
+                                source: source.value.to_string(),
+                                specifiers: vec![ImportSpecifier {
+                                    local: exported,
+                                    kind: ImportSpecifierKind::Named(spec.local.name().to_string()),
+                                    preserve_if_unused: false,
+                                }],
+                                is_type_only: false,
+                                side_effect_only: false,
+                                from_reexport: true,
+                            });
+                        }
+                    } else {
+                        for spec in &decl.specifiers {
+                            collect_export_specifier(spec, &mut export_names, false);
                         }
                     }
                 } else {
                     for spec in &decl.specifiers {
-                        collect_export_specifier(spec, exports, false);
+                        collect_export_specifier(spec, &mut export_names, false);
                     }
                 }
             }
@@ -113,7 +121,7 @@ pub(super) fn collect_module_exports(
                 match &export_default.declaration {
                     ExportDefaultDeclarationKind::FunctionDeclaration(func) => {
                         if let Some(id) = &func.id {
-                            exports.push(ExportedName {
+                            export_names.push(ExportedName {
                                 local: id.name.to_string(),
                                 exported: "default".to_string(),
                                 is_type_only: false,
@@ -122,7 +130,7 @@ pub(super) fn collect_module_exports(
                     }
                     ExportDefaultDeclarationKind::ClassDeclaration(class) => {
                         if let Some(id) = &class.id {
-                            exports.push(ExportedName {
+                            export_names.push(ExportedName {
                                 local: id.name.to_string(),
                                 exported: "default".to_string(),
                                 is_type_only: false,
@@ -130,7 +138,7 @@ pub(super) fn collect_module_exports(
                         }
                     }
                     ExportDefaultDeclarationKind::TSInterfaceDeclaration(iface) => {
-                        exports.push(ExportedName {
+                        export_names.push(ExportedName {
                             local: iface.id.name.to_string(),
                             exported: "default".to_string(),
                             is_type_only: false,
@@ -140,22 +148,22 @@ pub(super) fn collect_module_exports(
                 }
             }
             Statement::ExportAllDeclaration(export_all) => {
-                // Transitive `export * from "..."` — collect from target
                 if let Some(dep_idx) =
                     module.resolve_internal_specifier(export_all.source.value.as_str())
                 {
-                    collect_module_exports(
-                        dep_idx,
-                        exports,
-                        scan_result,
-                        visited,
-                        external_imports.as_deref_mut(),
-                    );
+                    let dep_exports = compute_module_exports(dep_idx, scan_result, cache, visiting);
+                    export_names.extend(dep_exports.export_names);
+                    external_imports.extend(dep_exports.external_imports);
                 }
             }
             _ => {}
         }
     }
+
+    visiting.remove(&module_idx);
+    let cached = CachedModuleExports { export_names, external_imports };
+    cache.insert(module_idx, cached.clone());
+    cached
 }
 
 pub(super) fn apply_namespace_wrap_renames(
@@ -267,6 +275,7 @@ pub(super) fn pre_scan_namespace_info(
     scan_result: &ScanResult<'_>,
     entry_idx: ModuleIdx,
     all_module_aliases: &FxHashMap<(ModuleIdx, SymbolId), ModuleIdx>,
+    module_exports: &FxHashMap<ModuleIdx, CachedModuleExports>,
 ) -> (FxHashMap<ModuleIdx, NamespaceWrapInfo>, FxHashMap<SymbolId, ModuleIdx>) {
     let entry = &scan_result.modules[entry_idx];
 
@@ -292,15 +301,9 @@ pub(super) fn pre_scan_namespace_info(
                         entry.resolve_internal_specifier(export_all.source.value.as_str())
                 {
                     let ns_name = derive_namespace_name(&scan_result.modules[target_idx].path);
-                    let mut export_names = Vec::new();
-                    let mut visited = FxHashSet::default();
-                    collect_module_exports(
-                        target_idx,
-                        &mut export_names,
-                        scan_result,
-                        &mut visited,
-                        None,
-                    );
+                    let export_names = module_exports
+                        .get(&target_idx)
+                        .map_or_else(Vec::new, |cached| cached.export_names.clone());
                     namespace_wraps.insert(
                         target_idx,
                         NamespaceWrapInfo { namespace_name: ns_name, export_names },
@@ -329,9 +332,9 @@ pub(super) fn pre_scan_namespace_info(
             && !namespace_wraps.contains_key(target_idx)
         {
             let ns_name = derive_namespace_name(&scan_result.modules[*target_idx].path);
-            let mut export_names = Vec::new();
-            let mut visited = FxHashSet::default();
-            collect_module_exports(*target_idx, &mut export_names, scan_result, &mut visited, None);
+            let export_names = module_exports
+                .get(target_idx)
+                .map_or_else(Vec::new, |cached| cached.export_names.clone());
             namespace_wraps
                 .insert(*target_idx, NamespaceWrapInfo { namespace_name: ns_name, export_names });
         }
@@ -354,15 +357,9 @@ pub(super) fn pre_scan_namespace_info(
                 && !new_wraps.iter().any(|(idx, _)| idx == target_idx)
             {
                 let ns_name = derive_namespace_name(&scan_result.modules[*target_idx].path);
-                let mut target_exports = Vec::new();
-                let mut visited = FxHashSet::default();
-                collect_module_exports(
-                    *target_idx,
-                    &mut target_exports,
-                    scan_result,
-                    &mut visited,
-                    None,
-                );
+                let target_exports = module_exports
+                    .get(target_idx)
+                    .map_or_else(Vec::new, |cached| cached.export_names.clone());
                 new_wraps.push((
                     *target_idx,
                     NamespaceWrapInfo { namespace_name: ns_name, export_names: target_exports },

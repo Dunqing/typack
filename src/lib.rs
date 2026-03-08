@@ -19,7 +19,7 @@ pub use options::TypackOptions;
 use oxc_allocator::Allocator;
 use oxc_diagnostics::OxcDiagnostic;
 
-use crate::generate_stage::GenerateStage;
+use crate::generate_stage::{GenerateStage, build_shared_generate_output};
 use crate::link_stage::{build_link_stage_output, build_rename_plan};
 use crate::scan_stage::ScanStage;
 
@@ -59,6 +59,10 @@ impl TypackBundler {
     ///
     /// Returns `Err` with a list of `OxcDiagnostic` when fatal errors occur,
     /// such as parse failures or unresolvable import specifiers.
+    ///
+    /// # Panics
+    ///
+    /// Panics if per-entry link data is missing for a known entry index.
     pub fn bundle(options: &TypackOptions) -> Result<BundleResult, Vec<OxcDiagnostic>> {
         let allocator = Allocator::default();
         let mut scan_result = ScanStage::new(options, &allocator).scan()?;
@@ -67,18 +71,28 @@ impl TypackBundler {
         let entry_indices = scan_result.entry_indices.clone();
         let rename_plan = build_rename_plan(&scan_result);
         let link_output = build_link_stage_output(&scan_result, rename_plan);
+        let shared_generate = build_shared_generate_output(
+            &scan_result,
+            &allocator,
+            options.sourcemap,
+            &options.cwd,
+            &link_output,
+        );
         all_warnings.extend(link_output.warnings.iter().cloned());
 
         for &entry_idx in &entry_indices {
+            let per_entry = link_output
+                .per_entry
+                .get(&entry_idx)
+                .expect("per-entry link data should exist for every entry");
             let generated = {
                 let stage = GenerateStage::new(
                     &scan_result,
                     entry_idx,
-                    &allocator,
-                    options.sourcemap,
+                    per_entry,
                     options.cjs_default,
-                    &options.cwd,
                     &link_output,
+                    &shared_generate,
                 );
                 stage.generate()
             };

@@ -15,6 +15,7 @@ mod types;
 use std::collections::VecDeque;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use oxc_allocator::{Allocator, CloneIn};
 use oxc_ast::AstBuilder;
@@ -34,12 +35,12 @@ use crate::helpers::collect_decl_names;
 use crate::link_stage::exports::{
     find_external_reexport_source, resolve_export_local_name, resolve_export_origin,
 };
-use crate::link_stage::{LinkStageOutput, NeededKindFlags, RenamePlan, build_per_entry_link_data};
+use crate::link_stage::{LinkStageOutput, NeededKindFlags, PerEntryLinkData, RenamePlan};
 use crate::scan_stage::ScanResult;
 use crate::types::{Module, ModuleIdx};
 use namespace::{
-    apply_namespace_wrap_renames, collect_declaration_names, collect_export_specifier,
-    collect_module_exports, deconflict_namespace_wrap_names, pre_scan_namespace_info,
+    apply_namespace_wrap_renames, build_module_exports_cache, collect_declaration_names,
+    collect_export_specifier, deconflict_namespace_wrap_names, pre_scan_namespace_info,
 };
 use output_assembler::OutputAssembler;
 use rewriter::{InlineImportAndNamespaceRewriter, SemanticRenamer, ensure_declare_on_declaration};
@@ -48,12 +49,10 @@ use types::*;
 /// Generate stage: produces the bundled `.d.ts` output.
 pub struct GenerateStage<'a, 'b> {
     scan_result: &'b ScanResult<'a>,
-    entry_idx: ModuleIdx,
-    allocator: &'a Allocator,
-    sourcemap: bool,
+    entry: EntryGenerateContext<'b>,
     cjs_default: bool,
-    cwd: &'b Path,
     link_output: &'b LinkStageOutput,
+    shared_output: &'b SharedGenerateOutput,
 }
 
 /// Output from generate stage.
@@ -63,17 +62,75 @@ pub struct GenerateOutput {
     pub warnings: Vec<OxcDiagnostic>,
 }
 
+pub fn build_shared_generate_output<'a>(
+    scan_result: &ScanResult<'a>,
+    allocator: &'a Allocator,
+    sourcemap: bool,
+    cwd: &Path,
+    link_output: &LinkStageOutput,
+) -> SharedGenerateOutput {
+    let module_exports = build_module_exports_cache(scan_result);
+    let mut modules = FxHashMap::default();
+    for module in &scan_result.modules {
+        let analysis = build_shared_module_analysis(module.idx, scan_result, link_output);
+        let mut ns_name_map = FxHashMap::default();
+        let statements = module
+            .program
+            .body
+            .iter()
+            .enumerate()
+            .map(|(stmt_idx, stmt)| {
+                prepare_statement_output(
+                    module.idx,
+                    stmt_idx,
+                    stmt,
+                    &analysis,
+                    scan_result,
+                    allocator,
+                    sourcemap,
+                    cwd,
+                    link_output,
+                    &mut ns_name_map,
+                )
+                .map(Arc::new)
+            })
+            .collect();
+        modules.insert(module.idx, PreparedModule { analysis, statements });
+    }
+    SharedGenerateOutput { modules, module_exports }
+}
+
+#[cfg(test)]
+mod test_stats {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    pub(super) static SHARED_MODULE_PREPARES: AtomicUsize = AtomicUsize::new(0);
+    pub(super) static SHARED_STATEMENT_PREPARES: AtomicUsize = AtomicUsize::new(0);
+
+    pub(super) fn counts() -> (usize, usize) {
+        (
+            SHARED_MODULE_PREPARES.load(Ordering::SeqCst),
+            SHARED_STATEMENT_PREPARES.load(Ordering::SeqCst),
+        )
+    }
+}
+
 impl<'a, 'b> GenerateStage<'a, 'b> {
     pub fn new(
         scan_result: &'b ScanResult<'a>,
         entry_idx: ModuleIdx,
-        allocator: &'a Allocator,
-        sourcemap: bool,
+        per_entry: &'b PerEntryLinkData,
         cjs_default: bool,
-        cwd: &'b Path,
         link_output: &'b LinkStageOutput,
+        shared_output: &'b SharedGenerateOutput,
     ) -> Self {
-        Self { scan_result, entry_idx, allocator, sourcemap, cjs_default, cwd, link_output }
+        Self {
+            scan_result,
+            entry: EntryGenerateContext { entry_idx, per_entry },
+            cjs_default,
+            link_output,
+            shared_output,
+        }
     }
 
     /// Generate the bundled `.d.ts` output.
@@ -81,7 +138,6 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         let mut output = OutputAssembler::default();
         let mut acc = GenerateAcc::default();
         let rename_plan = &self.link_output.rename_plan;
-        let per_entry = build_per_entry_link_data(self.scan_result, self.entry_idx);
 
         // Collect and deduplicate reference directives from all modules
         let mut seen_set: FxHashSet<&str> = FxHashSet::default();
@@ -100,8 +156,9 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         // Pre-scan all modules for namespace import patterns
         let (mut namespace_wraps, namespace_aliases) = pre_scan_namespace_info(
             self.scan_result,
-            self.entry_idx,
+            self.entry.entry_idx,
             &self.link_output.all_module_aliases,
+            &self.shared_output.module_exports,
         );
 
         // Keep namespace wrapper exports aligned with semantic renames.
@@ -120,9 +177,8 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             namespace_wraps: &namespace_wraps,
             namespace_aliases: &namespace_aliases,
             rename_plan,
-            needed_symbol_kinds: &per_entry.needed_names_plan.symbol_kinds,
+            needed_symbol_kinds: &self.entry.per_entry.needed_names_plan.symbol_kinds,
             default_export_names: &self.link_output.default_export_names,
-            helper_reserved_names: &helper_reserved_names,
         };
 
         let mut module_outputs: VecDeque<ModuleOutput> = VecDeque::new();
@@ -147,8 +203,8 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         }
         output.push_unmapped(star_exports_output);
 
-        let has_module_output =
-            !acc.ns_wrapper_blocks.is_empty() || module_outputs.iter().any(|m| !m.code.is_empty());
+        let has_module_output = !acc.ns_wrapper_blocks.is_empty()
+            || module_outputs.iter().any(|m| !m.fragments.is_empty());
 
         // Blank line between imports/star-exports and region markers
         if (had_imports || !acc.star_exports.is_empty()) && has_module_output {
@@ -156,7 +212,9 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         }
 
         if !acc.ns_wrapper_blocks.is_empty() {
-            output.push_unmapped(std::mem::take(&mut acc.ns_wrapper_blocks));
+            for block in std::mem::take(&mut acc.ns_wrapper_blocks) {
+                output.push_unmapped(block);
+            }
         }
 
         // Emit namespace-wrapped modules first, then regular modules.
@@ -164,16 +222,18 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             if let Some(wrapper) = &module.namespace_wrapper {
                 output.push_unmapped(wrapper.clone());
             }
-            if !module.code.is_empty() {
-                output.push_mapped(&module.code, module.map.clone());
+            for fragment in &module.fragments {
+                output.push_mapped(&fragment.code, fragment.map.clone());
             }
         }
         for module in module_outputs.iter().filter(|m| !m.is_ns_wrapped) {
-            if module.code.is_empty() {
+            if module.fragments.is_empty() {
                 continue;
             }
             output.push_unmapped(format!("//#region {}\n", module.relative_path));
-            output.push_mapped(&module.code, module.map.clone());
+            for fragment in &module.fragments {
+                output.push_mapped(&fragment.code, fragment.map.clone());
+            }
             output.push_unmapped("//#endregion\n");
         }
 
@@ -222,6 +282,11 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         shared: &GenerateSharedCtx<'_>,
         acc: &mut GenerateAcc,
     ) -> Option<ModuleOutput> {
+        let prepared_module = self
+            .shared_output
+            .modules
+            .get(&module_idx)
+            .expect("prepared module output should exist for every scanned module");
         let ns_wrap = shared.namespace_wraps.get(&module_idx);
         let module_has_augmentation = self.scan_result.modules[module_idx].has_augmentation;
 
@@ -244,238 +309,55 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         let imports_start = acc.imports.len();
         let analysis = self.analyze_module(module_idx, module_needed.as_ref(), shared, acc);
 
-        // Phase 2: Selective clone + transform — only clone statements that
-        // survive tree-shaking, and for unwrapped exports clone only the inner
-        // declaration (not the export wrapper).
-        let ast = AstBuilder::new(self.allocator);
-        let mut transformed_body = ast.vec();
-        let module = &self.scan_result.modules[module_idx];
+        let mut fragments = Vec::new();
+        let mut referenced_names = FxHashSet::default();
+        let mut external_ns_members: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
 
         for (i, action) in analysis.statement_actions.iter().enumerate() {
-            match action {
-                StatementAction::Skip => {}
-                StatementAction::Include => {
-                    let stmt = module.program.body[i].clone_in_with_semantic_ids(self.allocator);
-                    transformed_body.push(stmt);
-                }
-                StatementAction::UnwrapExportDeclaration => {
-                    let Statement::ExportNamedDeclaration(export) = &module.program.body[i] else {
-                        unreachable!()
-                    };
-                    let mut decl = export
-                        .declaration
-                        .as_ref()
-                        .unwrap()
-                        .clone_in_with_semantic_ids(self.allocator);
-                    ensure_declare_on_declaration(&mut decl);
-                    decl.span_mut().start = export.span.start;
-                    transformed_body.push(Statement::from(decl));
-                }
-                StatementAction::UnwrapExportDefault => {
-                    let Statement::ExportDefaultDeclaration(export_default) =
-                        &module.program.body[i]
-                    else {
-                        unreachable!()
-                    };
-                    let declaration =
-                        export_default.declaration.clone_in_with_semantic_ids(self.allocator);
-                    match declaration {
-                        ExportDefaultDeclarationKind::FunctionDeclaration(mut func_decl) => {
-                            func_decl.span.start = export_default.span.start;
-                            if func_decl.id.is_none() {
-                                func_decl.id = Some(ast.binding_identifier(SPAN, "export_default"));
-                            }
-                            func_decl.declare = true;
-                            transformed_body.push(Statement::FunctionDeclaration(func_decl));
-                        }
-                        ExportDefaultDeclarationKind::ClassDeclaration(mut class_decl) => {
-                            class_decl.span.start = export_default.span.start;
-                            if class_decl.id.is_none() {
-                                class_decl.id =
-                                    Some(ast.binding_identifier(SPAN, "export_default"));
-                            }
-                            class_decl.declare = true;
-                            transformed_body.push(Statement::ClassDeclaration(class_decl));
-                        }
-                        ExportDefaultDeclarationKind::TSInterfaceDeclaration(mut iface_decl) => {
-                            iface_decl.span.start = export_default.span.start;
-                            transformed_body.push(Statement::TSInterfaceDeclaration(iface_decl));
-                        }
-                        _ => {}
-                    }
+            if matches!(action, StatementAction::Skip) {
+                continue;
+            }
+            let Some(prepared) = prepared_module.statements[i].as_ref() else {
+                continue;
+            };
+
+            acc.imports.extend(prepared.imports.iter().cloned());
+            for block in &prepared.ns_wrapper_blocks {
+                if acc.seen_ns_wrapper_blocks.insert(block.clone()) {
+                    acc.ns_wrapper_blocks.push(block.clone());
                 }
             }
+            merge_external_ns_members(&mut external_ns_members, &prepared.external_ns_members);
+            referenced_names.extend(prepared.referenced_names.iter().cloned());
+            acc.warnings.extend(prepared.warnings.iter().cloned());
+            fragments.push(Arc::clone(prepared));
         }
 
-        if transformed_body.is_empty() && ns_wrap.is_none() {
+        if fragments.is_empty() && ns_wrap.is_none() {
             return None;
         }
 
-        // Apply semantic renames (symbol renames from link stage + import renames).
-        apply_semantic_renames(
-            module,
-            self.allocator,
-            shared.rename_plan,
-            &analysis.import_renames,
-            &mut transformed_body,
-        );
-
-        // AST-level import-type rewriting and namespace alias flattening.
-        let external_ns_members = {
-            let mut rewriter = InlineImportAndNamespaceRewriter {
-                ast,
-                module,
-                imports: &mut acc.imports,
-                ns_name_map: &mut acc.ns_name_map,
-                scan_result: self.scan_result,
-                ns_wrapper_output: &mut acc.ns_wrapper_blocks,
-                namespace_aliases: analysis.ns_aliases,
-                external_ns_info: &analysis.external_ns_info,
-                external_ns_members: FxHashMap::default(),
-                helper_reserved_names: shared.helper_reserved_names,
-                warnings: &mut acc.warnings,
-            };
-            for stmt in &mut transformed_body {
-                rewriter.visit_statement(stmt);
-            }
-            rewriter.external_ns_members
-        };
-
-        // Convert external namespace imports to named imports based on
-        // member accesses recorded during the rewrite pass.
-        for (specifier, members) in &external_ns_members {
-            let ns_local = analysis
-                .external_ns_info
-                .values()
-                .find(|(spec, _)| spec == specifier)
-                .map(|(_, local)| local.as_str());
-
-            // Find the import entry that contains the namespace specifier
-            let ns_imp_idx = ns_local.and_then(|ns_local_name| {
-                acc.imports.iter().position(|i| {
-                    i.source == *specifier
-                        && i.specifiers.iter().any(|s| {
-                            matches!(s.kind, ImportSpecifierKind::Namespace)
-                                && s.local == ns_local_name
-                        })
-                })
-            });
-
-            if let Some(idx) = ns_imp_idx {
-                // Remove the namespace specifier
-                let ns_local_name = ns_local.unwrap();
-                acc.imports[idx].specifiers.retain(|s| {
-                    !(matches!(s.kind, ImportSpecifierKind::Namespace) && s.local == ns_local_name)
-                });
-
-                // Add named imports — either to an existing import with the
-                // same source, or to the one we just modified
-                let target_idx = acc
-                    .imports
-                    .iter()
-                    .position(|i| {
-                        i.source == *specifier
-                            && i.specifiers
-                                .iter()
-                                .any(|s| matches!(s.kind, ImportSpecifierKind::Named(_)))
-                    })
-                    .unwrap_or(idx);
-
-                for member in members {
-                    if !acc.imports[target_idx]
-                        .specifiers
-                        .iter()
-                        .any(|s| matches!(&s.kind, ImportSpecifierKind::Named(n) if n == member))
-                    {
-                        acc.imports[target_idx].specifiers.push(ImportSpecifier {
-                            local: member.clone(),
-                            kind: ImportSpecifierKind::Named(member.clone()),
-                        });
-                    }
-                }
-
-                // Remove the namespace import entry if it has no specifiers left
-                if acc.imports[idx].specifiers.is_empty() {
-                    acc.imports.remove(idx);
-                }
-            }
-        }
-
-        // Phase 3: Prune unused imports.
-        prune_unused_imports(
+        convert_external_namespace_imports(
             &mut acc.imports,
             imports_start,
-            &transformed_body,
-            &acc.exports[exports_start..],
-            &analysis.reexported_import_names,
-            &analysis.external_ns_info,
+            &prepared_module.analysis.external_ns_info,
+            &external_ns_members,
         );
 
-        let (relative_path, program_span, source_type, source_text, reference_directive_set) = {
-            let module = &self.scan_result.modules[module_idx];
-            (
-                module.relative_path.clone(),
-                module.program.span,
-                module.program.source_type,
-                module.source,
-                module.reference_directives.iter().cloned().collect::<FxHashSet<String>>(),
-            )
-        };
-
-        let (comments, hashbang, directives) = {
-            let module = &self.scan_result.modules[module_idx];
-            let raw_comments = module.program.comments.clone_in_with_semantic_ids(self.allocator);
-            let comments = ast.vec_from_iter(raw_comments.into_iter().filter(|comment| {
-                let comment_text = comment.span.source_text(source_text).trim();
-                if reference_directive_set.contains(comment_text) {
-                    return false;
-                }
-                !(comment_text.starts_with("//# sourceMappingURL=")
-                    || comment_text.starts_with("//@ sourceMappingURL="))
-            }));
-            let hashbang = module.program.hashbang.clone_in_with_semantic_ids(self.allocator);
-            let directives = module.program.directives.clone_in_with_semantic_ids(self.allocator);
-            (comments, hashbang, directives)
-        };
-
-        let program = ast.program(
-            program_span,
-            source_type,
-            source_text,
-            comments,
-            hashbang,
-            directives,
-            transformed_body,
-        );
-
-        let input_sourcemap = self.scan_result.modules[module_idx].input_sourcemap.clone();
-
-        let mut codegen_options = CodegenOptions {
-            indent_char: IndentChar::Space,
-            indent_width: 2,
-            ..CodegenOptions::default()
-        };
-        if self.sourcemap {
-            codegen_options.source_map_path = Some(PathBuf::from(&relative_path));
-        }
-        let codegen_return = Codegen::new().with_options(codegen_options).build(&program);
-        let code = codegen_return.code;
-        let map = if self.sourcemap {
-            match (codegen_return.map, input_sourcemap) {
-                (Some(codegen_map), Some(input_map)) => {
-                    let module_path = &self.scan_result.modules[module_idx].path;
-                    Some(sourcemap::compose_sourcemaps(
-                        &codegen_map,
-                        &input_map,
-                        module_path,
-                        self.cwd,
-                    ))
-                }
-                (map, _) => map,
-            }
+        let entry_reexported_import_names = FxHashSet::default();
+        let reexported_import_names = if module_idx == self.entry.entry_idx {
+            &entry_reexported_import_names
         } else {
-            None
+            &prepared_module.analysis.reexported_import_names
         };
+
+        prune_unused_imports_by_name(
+            &mut acc.imports,
+            imports_start,
+            &referenced_names,
+            &acc.exports[exports_start..],
+            reexported_import_names,
+        );
 
         let namespace_wrapper = ns_wrap.map(|wrap| {
             let mut out = String::new();
@@ -495,11 +377,10 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         });
 
         Some(ModuleOutput {
-            relative_path,
+            relative_path: self.scan_result.modules[module_idx].relative_path.clone(),
             is_ns_wrapped: ns_wrap.is_some(),
             namespace_wrapper,
-            code,
-            map,
+            fragments,
         })
     }
 
@@ -514,102 +395,8 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         acc: &mut GenerateAcc,
     ) -> ModuleAnalysis {
         let module = &self.scan_result.modules[module_idx];
-        let mut analysis = ModuleAnalysis {
-            statement_actions: Vec::with_capacity(module.program.body.len()),
-            import_renames: FxHashMap::default(),
-            ns_aliases: FxHashSet::default(),
-            external_ns_info: FxHashMap::default(),
-            reexported_import_names: FxHashSet::default(),
-        };
-
-        // Pre-scan: collect import renames, ns aliases, external ns info,
-        // and reexported import names.
-        for stmt in &module.program.body {
-            // Collect local names from `export { X }` (no source) for non-entry
-            // modules. When X was imported from an external package, the import
-            // must be preserved even though X isn't used in local declarations.
-            if !module.is_entry
-                && let Statement::ExportNamedDeclaration(decl) = stmt
-                && decl.source.is_none()
-                && decl.declaration.is_none()
-            {
-                for spec in &decl.specifiers {
-                    analysis.reexported_import_names.insert(spec.local.name().to_string());
-                }
-            }
-            if let Statement::ImportDeclaration(import_decl) = stmt
-                && let Some(specifiers) = &import_decl.specifiers
-            {
-                let is_internal =
-                    module.resolve_internal_specifier(import_decl.source.value.as_str()).is_some();
-
-                if let Some(source_idx) =
-                    module.resolve_internal_specifier(import_decl.source.value.as_str())
-                {
-                    // Internal import processing
-                    let source_module = &self.scan_result.modules[source_idx];
-                    for spec in specifiers {
-                        match spec {
-                            oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(
-                                ns,
-                            ) => {
-                                if let Some(symbol_id) = ns.local.symbol_id.get() {
-                                    analysis.ns_aliases.insert(symbol_id);
-                                }
-                            }
-                            oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) => {
-                                let imported_alias = s.imported.name().to_string();
-                                let local_name =
-                                    resolve_export_local_name(source_module, &imported_alias)
-                                        .unwrap_or(imported_alias);
-                                let resolved_imported = shared
-                                    .rename_plan
-                                    .resolve_name(source_module, &local_name)
-                                    .map_or(local_name, ToString::to_string);
-                                if s.local.name.as_str() != resolved_imported
-                                    && let Some(symbol_id) = s.local.symbol_id.get()
-                                {
-                                    analysis.import_renames.insert(symbol_id, resolved_imported);
-                                }
-                            }
-                            oxc_ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(
-                                def,
-                            ) => {
-                                if let Some(mut actual_name) =
-                                    shared.default_export_names.get(&source_module.idx).cloned()
-                                {
-                                    if let Some(renamed) =
-                                        shared.rename_plan.resolve_name(source_module, &actual_name)
-                                    {
-                                        actual_name = renamed.to_string();
-                                    }
-                                    if def.local.name.as_str() != actual_name
-                                        && let Some(symbol_id) = def.local.symbol_id.get()
-                                    {
-                                        analysis.import_renames.insert(symbol_id, actual_name);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else if !is_internal {
-                    // External import — collect namespace specifiers
-                    for spec in specifiers {
-                        if let oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(
-                            ns,
-                        ) = spec
-                            && let Some(symbol_id) = ns.local.symbol_id.get()
-                        {
-                            analysis.ns_aliases.insert(symbol_id);
-                            analysis.external_ns_info.insert(
-                                symbol_id,
-                                (import_decl.source.value.to_string(), ns.local.name.to_string()),
-                            );
-                        }
-                    }
-                }
-            }
-        }
+        let mut analysis =
+            ModuleAnalysis { statement_actions: Vec::with_capacity(module.program.body.len()) };
 
         // Determine per-statement actions and collect exports/imports/star_exports
         // directly into acc.
@@ -640,7 +427,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                     {
                         return StatementAction::Skip;
                     }
-                    if module.is_entry {
+                    if module.idx == self.entry.entry_idx {
                         let before_len = acc.exports.len();
                         collect_declaration_names(decl, &mut acc.exports);
                         for exp in &mut acc.exports[before_len..] {
@@ -668,6 +455,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                                     } else {
                                         ImportSpecifierKind::Named(local_name.to_string())
                                     },
+                                    preserve_if_unused: false,
                                 }
                             })
                             .collect();
@@ -681,7 +469,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                             });
                         }
                     }
-                    if module.is_entry {
+                    if module.idx == self.entry.entry_idx {
                         for spec in &export_decl.specifiers {
                             let exported_name = spec.exported.name().to_string();
                             if let Some(source_module_idx) = internal_source_idx {
@@ -710,6 +498,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                                             } else {
                                                 ImportSpecifierKind::Named(imported_name)
                                             },
+                                            preserve_if_unused: false,
                                         }],
                                         is_type_only: false,
                                         side_effect_only: false,
@@ -748,7 +537,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                     StatementAction::Skip
                 } else {
                     // Bare specifiers: `export { X, Y }`
-                    if module.is_entry {
+                    if module.idx == self.entry.entry_idx {
                         for spec in &export_decl.specifiers {
                             let exported_name = spec.exported.name().to_string();
                             let spec_is_type =
@@ -796,7 +585,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                     ExportDefaultDeclarationKind::FunctionDeclaration(func_decl) => {
                         let name =
                             func_decl.id.as_ref().map_or("export_default", |id| id.name.as_str());
-                        if module.is_entry {
+                        if module.idx == self.entry.entry_idx {
                             acc.exports.push(ExportedName {
                                 local: name.to_string(),
                                 exported: "default".to_string(),
@@ -808,7 +597,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                     ExportDefaultDeclarationKind::ClassDeclaration(class_decl) => {
                         let name =
                             class_decl.id.as_ref().map_or("export_default", |id| id.name.as_str());
-                        if module.is_entry {
+                        if module.idx == self.entry.entry_idx {
                             acc.exports.push(ExportedName {
                                 local: name.to_string(),
                                 exported: "default".to_string(),
@@ -819,7 +608,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                     }
                     ExportDefaultDeclarationKind::TSInterfaceDeclaration(iface_decl) => {
                         let name = iface_decl.id.name.as_str();
-                        if module.is_entry {
+                        if module.idx == self.entry.entry_idx {
                             acc.exports.push(ExportedName {
                                 local: name.to_string(),
                                 exported: "default".to_string(),
@@ -829,7 +618,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                         StatementAction::UnwrapExportDefault
                     }
                     ExportDefaultDeclarationKind::Identifier(id) => {
-                        if module.is_entry {
+                        if module.idx == self.entry.entry_idx {
                             acc.exports.push(ExportedName {
                                 local: id.name.to_string(),
                                 exported: "default".to_string(),
@@ -848,7 +637,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                 if let Some(exported) = &export_all.exported {
                     let name = exported.name().to_string();
                     if let Some(source_module_idx) = internal_source_idx {
-                        if module.is_entry
+                        if module.idx == self.entry.entry_idx
                             && let Some(wrap) = shared.namespace_wraps.get(&source_module_idx)
                         {
                             acc.exports.push(ExportedName {
@@ -863,12 +652,13 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                             specifiers: vec![ImportSpecifier {
                                 local: name.clone(),
                                 kind: ImportSpecifierKind::Namespace,
+                                preserve_if_unused: true,
                             }],
                             is_type_only: false,
                             side_effect_only: false,
                             from_reexport: true,
                         });
-                        if module.is_entry {
+                        if module.idx == self.entry.entry_idx {
                             acc.exports.push(ExportedName {
                                 local: name.clone(),
                                 exported: name,
@@ -877,18 +667,14 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                         }
                     }
                 } else if let Some(source_module_idx) = internal_source_idx {
-                    if module.is_entry {
+                    if module.idx == self.entry.entry_idx {
                         let before_len = acc.exports.len();
-                        let mut visited = FxHashSet::default();
-                        let mut star_external_imports = Vec::new();
-                        collect_module_exports(
-                            source_module_idx,
-                            &mut acc.exports,
-                            self.scan_result,
-                            &mut visited,
-                            Some(&mut star_external_imports),
-                        );
-                        acc.imports.extend(star_external_imports);
+                        if let Some(cached_exports) =
+                            self.shared_output.module_exports.get(&source_module_idx)
+                        {
+                            acc.exports.extend(cached_exports.export_names.iter().cloned());
+                            acc.imports.extend(cached_exports.external_imports.iter().cloned());
+                        }
                         for exp in &mut acc.exports[before_len..] {
                             if let Some(new_name) = shared.rename_plan.resolve_name(
                                 &self.scan_result.modules[source_module_idx],
@@ -920,17 +706,22 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                             ImportDeclarationSpecifier::ImportSpecifier(s) => ImportSpecifier {
                                 local: s.local.name.to_string(),
                                 kind: ImportSpecifierKind::Named(s.imported.name().to_string()),
+                                preserve_if_unused: false,
                             },
                             ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => {
                                 ImportSpecifier {
                                     local: s.local.name.to_string(),
                                     kind: ImportSpecifierKind::Default,
+                                    preserve_if_unused: false,
                                 }
                             }
                             ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
                                 ImportSpecifier {
                                     local: s.local.name.to_string(),
                                     kind: ImportSpecifierKind::Namespace,
+                                    preserve_if_unused: !is_generated_external_namespace_helper(
+                                        s.local.name.as_str(),
+                                    ),
                                 }
                             }
                         }
@@ -977,67 +768,406 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
     }
 }
 
-/// Prune unused imports after the transform and rewrite passes.
-///
-/// Drops external namespace helpers whose only usages were inside tree-shaken
-/// declarations, and removes named/default import specifiers that are no longer
-/// referenced in the transformed AST.
-fn prune_unused_imports(
-    imports: &mut Vec<ExternalImport>,
-    imports_start: usize,
-    transformed_body: &oxc_allocator::Vec<'_, Statement<'_>>,
-    module_exports: &[ExportedName],
-    reexported_import_names: &FxHashSet<String>,
-    external_ns_info: &FxHashMap<SymbolId, (String, String)>,
-) {
-    let referenced_names = {
-        let mut collector = ReferencedNameCollector::new();
-        for stmt in transformed_body {
-            collector.visit_statement(stmt);
-        }
-        collector.finish()
+fn build_shared_module_analysis(
+    module_idx: ModuleIdx,
+    scan_result: &ScanResult<'_>,
+    link_output: &LinkStageOutput,
+) -> SharedModuleAnalysis {
+    #[cfg(test)]
+    test_stats::SHARED_MODULE_PREPARES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+    let module = &scan_result.modules[module_idx];
+    let mut analysis = SharedModuleAnalysis {
+        import_renames: FxHashMap::default(),
+        ns_aliases: FxHashSet::default(),
+        external_ns_info: FxHashMap::default(),
+        reexported_import_names: FxHashSet::default(),
     };
-    let module_exported_locals: FxHashSet<String> =
-        module_exports.iter().map(|export| export.local.clone()).collect();
 
-    // Drop TypeScript-generated external namespace helpers whose only
-    // usages were inside tree-shaken declarations. Keep user-authored
-    // namespace imports (for example `import * as http`) to preserve the
-    // plugin's current snapshot semantics.
-    if !external_ns_info.is_empty() {
-        for (specifier, local_name) in external_ns_info.values() {
-            if referenced_names.contains(local_name)
-                || module_exported_locals.contains(local_name.as_str())
-                || !is_generated_external_namespace_helper(local_name)
-            {
-                continue;
+    for stmt in &module.program.body {
+        if let Statement::ExportNamedDeclaration(decl) = stmt
+            && decl.source.is_none()
+            && decl.declaration.is_none()
+        {
+            for spec in &decl.specifiers {
+                analysis.reexported_import_names.insert(spec.local.name().to_string());
             }
+        }
 
-            if let Some(idx) = imports.iter().position(|i| {
-                i.source == *specifier
-                    && i.specifiers.iter().any(|s| {
-                        matches!(s.kind, ImportSpecifierKind::Namespace) && s.local == *local_name
-                    })
-            }) {
-                imports[idx].specifiers.retain(|s| {
-                    !(matches!(s.kind, ImportSpecifierKind::Namespace) && s.local == *local_name)
-                });
-                if imports[idx].specifiers.is_empty() {
-                    imports.remove(idx);
+        if let Statement::ImportDeclaration(import_decl) = stmt
+            && let Some(specifiers) = &import_decl.specifiers
+        {
+            if let Some(source_idx) =
+                module.resolve_internal_specifier(import_decl.source.value.as_str())
+            {
+                let source_module = &scan_result.modules[source_idx];
+                for spec in specifiers {
+                    match spec {
+                        oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) => {
+                            if let Some(symbol_id) = ns.local.symbol_id.get() {
+                                analysis.ns_aliases.insert(symbol_id);
+                            }
+                        }
+                        oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                            let imported_alias = s.imported.name().to_string();
+                            let local_name =
+                                resolve_export_local_name(source_module, &imported_alias)
+                                    .unwrap_or(imported_alias);
+                            let resolved_imported = link_output
+                                .rename_plan
+                                .resolve_name(source_module, &local_name)
+                                .map_or(local_name, ToString::to_string);
+                            if s.local.name.as_str() != resolved_imported
+                                && let Some(symbol_id) = s.local.symbol_id.get()
+                            {
+                                analysis.import_renames.insert(symbol_id, resolved_imported);
+                            }
+                        }
+                        oxc_ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => {
+                            if let Some(mut actual_name) =
+                                link_output.default_export_names.get(&source_module.idx).cloned()
+                            {
+                                if let Some(renamed) = link_output
+                                    .rename_plan
+                                    .resolve_name(source_module, &actual_name)
+                                {
+                                    actual_name = renamed.to_string();
+                                }
+                                if def.local.name.as_str() != actual_name
+                                    && let Some(symbol_id) = def.local.symbol_id.get()
+                                {
+                                    analysis.import_renames.insert(symbol_id, actual_name);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                for spec in specifiers {
+                    if let oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) =
+                        spec
+                        && let Some(symbol_id) = ns.local.symbol_id.get()
+                    {
+                        analysis.ns_aliases.insert(symbol_id);
+                        analysis.external_ns_info.insert(
+                            symbol_id,
+                            (import_decl.source.value.to_string(), ns.local.name.to_string()),
+                        );
+                    }
                 }
             }
         }
     }
 
-    // Drop external named/default imports that no longer have any
-    // remaining references after tree-shaking. Imports created from
-    // `export { ... } from "ext"` re-exports are exempt.
+    analysis
+}
+
+fn prepare_statement_output<'a>(
+    module_idx: ModuleIdx,
+    stmt_idx: usize,
+    stmt: &Statement<'a>,
+    analysis: &SharedModuleAnalysis,
+    scan_result: &ScanResult<'a>,
+    allocator: &'a Allocator,
+    sourcemap: bool,
+    cwd: &Path,
+    link_output: &LinkStageOutput,
+    ns_name_map: &mut FxHashMap<String, String>,
+) -> Option<PreparedStatementOutput> {
+    let module = &scan_result.modules[module_idx];
+    let action = prepared_statement_action(stmt, module)?;
+    #[cfg(test)]
+    test_stats::SHARED_STATEMENT_PREPARES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let ast = AstBuilder::new(allocator);
+    let mut transformed_body = ast.vec();
+
+    match action {
+        StatementAction::Skip => return None,
+        StatementAction::Include => {
+            let stmt = module.program.body[stmt_idx].clone_in_with_semantic_ids(allocator);
+            transformed_body.push(stmt);
+        }
+        StatementAction::UnwrapExportDeclaration => {
+            let Statement::ExportNamedDeclaration(export) = &module.program.body[stmt_idx] else {
+                unreachable!()
+            };
+            let mut decl =
+                export.declaration.as_ref().unwrap().clone_in_with_semantic_ids(allocator);
+            ensure_declare_on_declaration(&mut decl);
+            decl.span_mut().start = export.span.start;
+            transformed_body.push(Statement::from(decl));
+        }
+        StatementAction::UnwrapExportDefault => {
+            let Statement::ExportDefaultDeclaration(export_default) =
+                &module.program.body[stmt_idx]
+            else {
+                unreachable!()
+            };
+            let declaration = export_default.declaration.clone_in_with_semantic_ids(allocator);
+            match declaration {
+                ExportDefaultDeclarationKind::FunctionDeclaration(mut func_decl) => {
+                    func_decl.span.start = export_default.span.start;
+                    if func_decl.id.is_none() {
+                        func_decl.id = Some(ast.binding_identifier(SPAN, "export_default"));
+                    }
+                    func_decl.declare = true;
+                    transformed_body.push(Statement::FunctionDeclaration(func_decl));
+                }
+                ExportDefaultDeclarationKind::ClassDeclaration(mut class_decl) => {
+                    class_decl.span.start = export_default.span.start;
+                    if class_decl.id.is_none() {
+                        class_decl.id = Some(ast.binding_identifier(SPAN, "export_default"));
+                    }
+                    class_decl.declare = true;
+                    transformed_body.push(Statement::ClassDeclaration(class_decl));
+                }
+                ExportDefaultDeclarationKind::TSInterfaceDeclaration(mut iface_decl) => {
+                    iface_decl.span.start = export_default.span.start;
+                    transformed_body.push(Statement::TSInterfaceDeclaration(iface_decl));
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    apply_semantic_renames(
+        module,
+        allocator,
+        &link_output.rename_plan,
+        &analysis.import_renames,
+        &mut transformed_body,
+    );
+
+    let mut imports = Vec::new();
+    let mut ns_wrapper_output = String::new();
+    let mut warnings = Vec::new();
+    let external_ns_members = {
+        let mut rewriter = InlineImportAndNamespaceRewriter {
+            ast,
+            module,
+            imports: &mut imports,
+            ns_name_map,
+            scan_result,
+            ns_wrapper_output: &mut ns_wrapper_output,
+            namespace_aliases: analysis.ns_aliases.clone(),
+            external_ns_info: &analysis.external_ns_info,
+            external_ns_members: FxHashMap::default(),
+            helper_reserved_names: &link_output.reserved_decl_names,
+            warnings: &mut warnings,
+        };
+        for stmt in &mut transformed_body {
+            rewriter.visit_statement(stmt);
+        }
+        rewriter.external_ns_members
+    };
+
+    let referenced_names = {
+        let mut collector = ReferencedNameCollector::new();
+        for stmt in &transformed_body {
+            collector.visit_statement(stmt);
+        }
+        collector.finish()
+    };
+
+    let source_text = module.source;
+    let reference_directive_set =
+        module.reference_directives.iter().cloned().collect::<FxHashSet<_>>();
+    let raw_comments = module.program.comments.clone_in_with_semantic_ids(allocator);
+    let comments = ast.vec_from_iter(raw_comments.into_iter().filter(|comment| {
+        let comment_text = comment.span.source_text(source_text).trim();
+        if reference_directive_set.contains(comment_text) {
+            return false;
+        }
+        !(comment_text.starts_with("//# sourceMappingURL=")
+            || comment_text.starts_with("//@ sourceMappingURL="))
+    }));
+    let hashbang = module.program.hashbang.clone_in_with_semantic_ids(allocator);
+    let directives = module.program.directives.clone_in_with_semantic_ids(allocator);
+    let program = ast.program(
+        module.program.span,
+        module.program.source_type,
+        source_text,
+        comments,
+        hashbang,
+        directives,
+        transformed_body,
+    );
+
+    let mut codegen_options = CodegenOptions {
+        indent_char: IndentChar::Space,
+        indent_width: 2,
+        ..CodegenOptions::default()
+    };
+    if sourcemap {
+        codegen_options.source_map_path = Some(PathBuf::from(&module.relative_path));
+    }
+    let codegen_return = Codegen::new().with_options(codegen_options).build(&program);
+    let map = if sourcemap {
+        match (codegen_return.map, module.input_sourcemap.clone()) {
+            (Some(codegen_map), Some(input_map)) => {
+                Some(sourcemap::compose_sourcemaps(&codegen_map, &input_map, &module.path, cwd))
+            }
+            (map, _) => map,
+        }
+    } else {
+        None
+    };
+
+    Some(PreparedStatementOutput {
+        code: codegen_return.code,
+        map,
+        imports,
+        ns_wrapper_blocks: split_namespace_wrapper_blocks(&ns_wrapper_output),
+        external_ns_members,
+        referenced_names,
+        warnings,
+    })
+}
+
+fn prepared_statement_action(stmt: &Statement<'_>, module: &Module<'_>) -> Option<StatementAction> {
+    match stmt {
+        Statement::ExportNamedDeclaration(export_decl) => {
+            if export_decl.declaration.is_some() {
+                Some(StatementAction::UnwrapExportDeclaration)
+            } else {
+                None
+            }
+        }
+        Statement::ExportDefaultDeclaration(export_default) => match &export_default.declaration {
+            ExportDefaultDeclarationKind::FunctionDeclaration(_)
+            | ExportDefaultDeclarationKind::ClassDeclaration(_)
+            | ExportDefaultDeclarationKind::TSInterfaceDeclaration(_) => {
+                Some(StatementAction::UnwrapExportDefault)
+            }
+            _ => None,
+        },
+        Statement::ImportDeclaration(import_decl) => {
+            module.resolve_internal_specifier(import_decl.source.value.as_str())?;
+            None
+        }
+        Statement::TSNamespaceExportDeclaration(_) | Statement::TSExportAssignment(_) => None,
+        Statement::TSImportEqualsDeclaration(decl) => {
+            if let oxc_ast::ast::TSModuleReference::ExternalModuleReference(ext) =
+                &decl.module_reference
+                && module.resolve_internal_specifier(ext.expression.value.as_str()).is_some()
+            {
+                return None;
+            }
+            Some(StatementAction::Include)
+        }
+        _ => Some(StatementAction::Include),
+    }
+}
+
+fn split_namespace_wrapper_blocks(output: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut current = String::new();
+    for line in output.lines() {
+        // `InlineImportAndNamespaceRewriter::ensure_internal_typeof_namespace` and
+        // `ensure_external_namespace_import` emit wrapper blocks with `declare namespace`
+        // at column 0. This splitter relies on that exact block boundary format.
+        if line.starts_with("declare namespace ") && !current.is_empty() {
+            blocks.push(std::mem::take(&mut current));
+        }
+        current.push_str(line);
+        current.push('\n');
+    }
+    if !current.is_empty() {
+        blocks.push(current);
+    }
+    blocks
+}
+
+fn merge_external_ns_members(
+    target: &mut FxHashMap<String, FxHashSet<String>>,
+    incoming: &FxHashMap<String, FxHashSet<String>>,
+) {
+    for (specifier, members) in incoming {
+        target.entry(specifier.clone()).or_default().extend(members.iter().cloned());
+    }
+}
+
+fn convert_external_namespace_imports(
+    imports: &mut Vec<ExternalImport>,
+    imports_start: usize,
+    external_ns_info: &FxHashMap<SymbolId, (String, String)>,
+    external_ns_members: &FxHashMap<String, FxHashSet<String>>,
+) {
+    for (specifier, members) in external_ns_members {
+        let ns_local = external_ns_info
+            .values()
+            .find(|(spec, _)| spec == specifier)
+            .map(|(_, local)| local.as_str());
+
+        let ns_imp_idx = ns_local.and_then(|ns_local_name| {
+            imports[imports_start..].iter().position(|i| {
+                i.source == *specifier
+                    && i.specifiers.iter().any(|s| {
+                        matches!(s.kind, ImportSpecifierKind::Namespace) && s.local == ns_local_name
+                    })
+            })
+        });
+
+        if let Some(relative_idx) = ns_imp_idx {
+            let idx = imports_start + relative_idx;
+            let ns_local_name = ns_local.unwrap();
+            imports[idx].specifiers.retain(|s| {
+                !(matches!(s.kind, ImportSpecifierKind::Namespace) && s.local == ns_local_name)
+            });
+
+            let target_idx = imports[imports_start..]
+                .iter()
+                .position(|i| {
+                    i.source == *specifier
+                        && i.specifiers
+                            .iter()
+                            .any(|s| matches!(s.kind, ImportSpecifierKind::Named(_)))
+                })
+                .map_or(idx, |relative| imports_start + relative);
+
+            for member in members {
+                if !imports[target_idx]
+                    .specifiers
+                    .iter()
+                    .any(|s| matches!(&s.kind, ImportSpecifierKind::Named(n) if n == member))
+                {
+                    imports[target_idx].specifiers.push(ImportSpecifier {
+                        local: member.clone(),
+                        kind: ImportSpecifierKind::Named(member.clone()),
+                        preserve_if_unused: false,
+                    });
+                }
+            }
+
+            if imports[idx].specifiers.is_empty() {
+                imports.remove(idx);
+            }
+        }
+    }
+}
+
+/// Prune unused imports after entry assembly selects the module fragments to emit.
+fn prune_unused_imports_by_name(
+    imports: &mut Vec<ExternalImport>,
+    imports_start: usize,
+    referenced_names: &FxHashSet<String>,
+    module_exports: &[ExportedName],
+    reexported_import_names: &FxHashSet<String>,
+) {
+    let module_exported_locals: FxHashSet<String> =
+        module_exports.iter().map(|export| export.local.clone()).collect();
+
     for import in &mut imports[imports_start..] {
         if import.from_reexport {
             continue;
         }
         import.specifiers.retain(|specifier| match specifier.kind {
-            ImportSpecifierKind::Namespace => true,
+            ImportSpecifierKind::Namespace => {
+                specifier.preserve_if_unused
+                    || referenced_names.contains(specifier.local.as_str())
+                    || module_exported_locals.contains(specifier.local.as_str())
+                    || reexported_import_names.contains(specifier.local.as_str())
+            }
             ImportSpecifierKind::Default | ImportSpecifierKind::Named(_) => {
                 referenced_names.contains(specifier.local.as_str())
                     || module_exported_locals.contains(specifier.local.as_str())
@@ -1232,4 +1362,82 @@ impl<'a> Visit<'a> for ReferencedNameCollector {
 
 fn is_generated_external_namespace_helper(name: &str) -> bool {
     name.starts_with('_') && name.chars().any(|ch| ch.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use crate::{TypackBundler, TypackOptions};
+
+    use super::test_stats;
+
+    struct TempProject {
+        root: PathBuf,
+    }
+
+    impl TempProject {
+        fn new(name: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("current time should be after unix epoch")
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "typack_generate_stage_{name}_{}_{}",
+                std::process::id(),
+                nanos
+            ));
+            fs::create_dir_all(&root).expect("temp project directory should be created");
+            Self { root }
+        }
+
+        fn write_file(&self, relative_path: &str, content: &str) {
+            let path = self.root.join(relative_path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("parent directory should be created");
+            }
+            fs::write(path, content).expect("fixture file should be written");
+        }
+    }
+
+    impl Drop for TempProject {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn shared_prepare_runs_once_per_scanned_module_for_multi_entry_dep_is_entry() {
+        let project = TempProject::new("multi_entry_dep_is_entry");
+        project.write_file(
+            "index.d.ts",
+            "import { add } from './utils';\nexport declare function greet(name: string): string;\nexport { add };\n",
+        );
+        project.write_file(
+            "utils.d.ts",
+            "export declare function add(a: number, b: number): number;\nexport declare function subtract(a: number, b: number): number;\n",
+        );
+
+        let (module_prepares_before, statement_prepares_before) = test_stats::counts();
+        let result = TypackBundler::bundle(&TypackOptions {
+            input: vec![
+                project.root.join("index.d.ts").to_string_lossy().to_string(),
+                project.root.join("utils.d.ts").to_string_lossy().to_string(),
+            ],
+            cwd: project.root.clone(),
+            ..Default::default()
+        });
+
+        assert!(result.is_ok(), "bundle should succeed for multi-entry dep-is-entry fixture");
+        let (module_prepares_after, statement_prepares_after) = test_stats::counts();
+        let module_prepares = module_prepares_after - module_prepares_before;
+        let statement_prepares = statement_prepares_after - statement_prepares_before;
+        assert_eq!(module_prepares, 2, "shared preparation should visit each scanned module once");
+        assert_eq!(
+            statement_prepares, 3,
+            "shared statement preparation should prepare each transformable top-level statement once"
+        );
+    }
 }

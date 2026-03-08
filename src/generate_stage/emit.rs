@@ -29,6 +29,12 @@ pub(super) fn write_external_imports(imports: &mut Vec<ExternalImport>, output: 
                     .any(|s| s.local == spec.local && s.kind.sort_key() == spec.kind.sort_key())
                 {
                     existing.specifiers.push(spec);
+                } else if let Some(existing_spec) = existing
+                    .specifiers
+                    .iter_mut()
+                    .find(|s| s.local == spec.local && s.kind.sort_key() == spec.kind.sort_key())
+                {
+                    existing_spec.preserve_if_unused |= spec.preserve_if_unused;
                 }
             }
             if !existing.specifiers.is_empty() {

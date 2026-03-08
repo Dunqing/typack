@@ -1,13 +1,17 @@
 //! Data structures shared across generate-stage submodules.
 
+use std::sync::Arc;
+
 use oxc_diagnostics::OxcDiagnostic;
+use oxc_sourcemap::SourceMap;
 use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::link_stage::{NeededKindFlags, RenamePlan};
+use crate::link_stage::{NeededKindFlags, PerEntryLinkData, RenamePlan};
 use crate::types::ModuleIdx;
 
 /// An exported name with optional rename info.
+#[derive(Clone)]
 pub(super) struct ExportedName {
     /// The local name (used in the declaration).
     pub(super) local: String,
@@ -18,11 +22,14 @@ pub(super) struct ExportedName {
 }
 
 /// An import specifier collected from an external import.
+#[derive(Clone)]
 pub(super) struct ImportSpecifier {
     pub(super) local: String,
     pub(super) kind: ImportSpecifierKind,
+    pub(super) preserve_if_unused: bool,
 }
 
+#[derive(Clone)]
 pub(super) enum ImportSpecifierKind {
     Namespace,
     Default,
@@ -40,6 +47,7 @@ impl ImportSpecifierKind {
 }
 
 /// An external import to be preserved in the output.
+#[derive(Clone)]
 pub(super) struct ExternalImport {
     pub(super) source: String,
     pub(super) specifiers: Vec<ImportSpecifier>,
@@ -51,6 +59,7 @@ pub(super) struct ExternalImport {
 }
 
 /// An `export * from "mod"` to be preserved in the output.
+#[derive(Clone)]
 pub(super) struct ExternalStarExport {
     pub(super) source: String,
     pub(super) is_type_only: bool,
@@ -64,12 +73,17 @@ pub(super) struct NamespaceWrapInfo {
     pub(super) export_names: Vec<ExportedName>,
 }
 
+#[derive(Clone, Default)]
+pub(super) struct CachedModuleExports {
+    pub(super) export_names: Vec<ExportedName>,
+    pub(super) external_imports: Vec<ExternalImport>,
+}
+
 pub(super) struct ModuleOutput {
     pub(super) relative_path: String,
     pub(super) is_ns_wrapped: bool,
     pub(super) namespace_wrapper: Option<String>,
-    pub(super) code: String,
-    pub(super) map: Option<oxc_sourcemap::SourceMap>,
+    pub(super) fragments: Vec<Arc<PreparedStatementOutput>>,
 }
 
 pub(super) struct GenerateSharedCtx<'s> {
@@ -79,7 +93,39 @@ pub(super) struct GenerateSharedCtx<'s> {
     pub(super) needed_symbol_kinds:
         &'s FxHashMap<ModuleIdx, Option<FxHashMap<SymbolId, NeededKindFlags>>>,
     pub(super) default_export_names: &'s FxHashMap<ModuleIdx, String>,
-    pub(super) helper_reserved_names: &'s FxHashSet<String>,
+}
+
+#[derive(Clone)]
+pub(super) struct PreparedStatementOutput {
+    pub(super) code: String,
+    pub(super) map: Option<SourceMap>,
+    pub(super) imports: Vec<ExternalImport>,
+    pub(super) ns_wrapper_blocks: Vec<String>,
+    pub(super) external_ns_members: FxHashMap<String, FxHashSet<String>>,
+    pub(super) referenced_names: FxHashSet<String>,
+    pub(super) warnings: Vec<OxcDiagnostic>,
+}
+
+pub(super) struct SharedModuleAnalysis {
+    pub(super) import_renames: FxHashMap<SymbolId, String>,
+    pub(super) ns_aliases: FxHashSet<SymbolId>,
+    pub(super) external_ns_info: FxHashMap<SymbolId, (String, String)>,
+    pub(super) reexported_import_names: FxHashSet<String>,
+}
+
+pub(super) struct PreparedModule {
+    pub(super) analysis: SharedModuleAnalysis,
+    pub(super) statements: Vec<Option<Arc<PreparedStatementOutput>>>,
+}
+
+pub struct SharedGenerateOutput {
+    pub(super) modules: FxHashMap<ModuleIdx, PreparedModule>,
+    pub(super) module_exports: FxHashMap<ModuleIdx, CachedModuleExports>,
+}
+
+pub(super) struct EntryGenerateContext<'s> {
+    pub(super) entry_idx: ModuleIdx,
+    pub(super) per_entry: &'s PerEntryLinkData,
 }
 
 #[derive(Default)]
@@ -88,8 +134,8 @@ pub(super) struct GenerateAcc {
     pub(super) imports: Vec<ExternalImport>,
     pub(super) star_exports: Vec<ExternalStarExport>,
     pub(super) has_any_export_statement: bool,
-    pub(super) ns_name_map: FxHashMap<String, String>,
-    pub(super) ns_wrapper_blocks: String,
+    pub(super) ns_wrapper_blocks: Vec<String>,
+    pub(super) seen_ns_wrapper_blocks: FxHashSet<String>,
     pub(super) warnings: Vec<OxcDiagnostic>,
 }
 
@@ -113,12 +159,4 @@ pub(super) enum StatementAction {
 pub(super) struct ModuleAnalysis {
     /// Per-statement actions (indexed by position in original body).
     pub(super) statement_actions: Vec<StatementAction>,
-    /// Import renames: local symbol → resolved name from source module.
-    pub(super) import_renames: FxHashMap<SymbolId, String>,
-    /// Internal namespace alias symbols.
-    pub(super) ns_aliases: FxHashSet<SymbolId>,
-    /// External namespace info: symbol → (source, local_name).
-    pub(super) external_ns_info: FxHashMap<SymbolId, (String, String)>,
-    /// Names from re-exported imports that must survive pruning.
-    pub(super) reexported_import_names: FxHashSet<String>,
 }

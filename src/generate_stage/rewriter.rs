@@ -122,6 +122,7 @@ impl<'a> InlineImportAndNamespaceRewriter<'a, '_> {
             specifiers: vec![ImportSpecifier {
                 local: ns_name.clone(),
                 kind: ImportSpecifierKind::Namespace,
+                preserve_if_unused: false,
             }],
             is_type_only: false,
             side_effect_only: false,

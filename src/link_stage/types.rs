@@ -117,10 +117,12 @@ pub struct LinkStageOutput {
     pub default_export_names: FxHashMap<ModuleIdx, String>,
     pub reserved_decl_names: FxHashSet<String>,
     pub all_module_aliases: FxHashMap<(ModuleIdx, SymbolId), ModuleIdx>,
+    pub per_entry: FxHashMap<ModuleIdx, PerEntryLinkData>,
     pub warnings: Vec<OxcDiagnostic>,
 }
 
 /// Per-entry link data containing only the needed names plan for the entry.
+#[derive(Default)]
 pub struct PerEntryLinkData {
     pub needed_names_plan: NeededNamesPlan,
 }

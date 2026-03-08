@@ -72,11 +72,17 @@ pub fn build_link_stage_output(
         }
     }
 
+    let mut per_entry = FxHashMap::default();
+    for &entry_idx in &scan_result.entry_indices {
+        per_entry.insert(entry_idx, build_per_entry_link_data(scan_result, entry_idx));
+    }
+
     LinkStageOutput {
         rename_plan,
         default_export_names,
         reserved_decl_names,
         all_module_aliases,
+        per_entry,
         warnings,
     }
 }
