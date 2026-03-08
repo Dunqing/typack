@@ -34,7 +34,9 @@ use crate::helpers::collect_decl_names;
 use crate::link_stage::exports::{
     find_external_reexport_source, resolve_export_local_name, resolve_export_origin,
 };
-use crate::link_stage::{LinkStageOutput, NeededKindFlags, RenamePlan, build_per_entry_link_data};
+use crate::link_stage::{
+    LinkStageOutput, NeededKindFlags, NeededNamesCtx, RenamePlan, build_per_entry_link_data,
+};
 use crate::scan_stage::ScanResult;
 use crate::types::{Module, ModuleIdx};
 use namespace::{
@@ -87,19 +89,27 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             }
         }
 
+        // Precompute declaration graphs and root names once for all entries
+        let needed_names_ctx = NeededNamesCtx::new(self.scan_result);
+
         self.scan_result
             .entry_indices
             .iter()
-            .map(|&entry_idx| self.generate_entry(entry_idx, &unique_directives))
+            .map(|&entry_idx| self.generate_entry(entry_idx, &unique_directives, &needed_names_ctx))
             .collect()
     }
 
     /// Generate the bundled `.d.ts` output for a single entry.
-    fn generate_entry(&self, entry_idx: ModuleIdx, unique_directives: &[&str]) -> GenerateOutput {
+    fn generate_entry(
+        &self,
+        entry_idx: ModuleIdx,
+        unique_directives: &[&str],
+        needed_names_ctx: &NeededNamesCtx,
+    ) -> GenerateOutput {
         let mut output = OutputAssembler::default();
         let mut acc = GenerateAcc::default();
         let rename_plan = &self.link_output.rename_plan;
-        let per_entry = build_per_entry_link_data(self.scan_result, entry_idx);
+        let per_entry = build_per_entry_link_data(self.scan_result, entry_idx, needed_names_ctx);
 
         for directive in unique_directives {
             output.push_unmapped(format!("{directive}\n"));

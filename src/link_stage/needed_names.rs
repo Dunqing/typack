@@ -49,22 +49,50 @@ struct ModuleExpansion {
     inline_import_deps: Vec<InlineImportDep>,
 }
 
+/// Precomputed data shared across all entries for tree-shaking analysis.
+pub struct NeededNamesCtx {
+    declaration_graphs: FxHashMap<ModuleIdx, Vec<DeclarationNode>>,
+    root_names: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+}
+
+impl NeededNamesCtx {
+    pub fn new(scan_result: &ScanResult<'_>) -> Self {
+        let declaration_graphs = build_declaration_graphs(scan_result);
+        let root_names: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>> = scan_result
+            .modules
+            .iter()
+            .map(|m| {
+                let map: FxHashMap<SymbolId, String> = m
+                    .scoping
+                    .get_bindings(m.scoping.root_scope_id())
+                    .into_iter()
+                    .map(|(name, &sid)| (sid, name.to_string()))
+                    .collect();
+                (m.idx, map)
+            })
+            .collect();
+        Self { declaration_graphs, root_names }
+    }
+}
+
 /// Builds the tree-shaking plan determining which symbols from each module are needed.
+///
+/// Convenience wrapper that creates a fresh [`NeededNamesCtx`] internally.
+/// Prefer [`build_needed_names_with_ctx`] when processing multiple entries.
+#[cfg(test)]
 pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> NeededNamesPlan {
-    let declaration_graphs = build_declaration_graphs(scan_result);
-    let root_names: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>> = scan_result
-        .modules
-        .iter()
-        .map(|m| {
-            let map: FxHashMap<SymbolId, String> = m
-                .scoping
-                .get_bindings(m.scoping.root_scope_id())
-                .into_iter()
-                .map(|(name, &sid)| (sid, name.to_string()))
-                .collect();
-            (m.idx, map)
-        })
-        .collect();
+    let ctx = NeededNamesCtx::new(scan_result);
+    build_needed_names_with_ctx(entry, scan_result, &ctx)
+}
+
+/// Builds the tree-shaking plan using precomputed shared context.
+pub fn build_needed_names_with_ctx(
+    entry: &Module<'_>,
+    scan_result: &ScanResult<'_>,
+    ctx: &NeededNamesCtx,
+) -> NeededNamesPlan {
+    let declaration_graphs = &ctx.declaration_graphs;
+    let root_names = &ctx.root_names;
     let mut needed_names: FxHashMap<ModuleIdx, FxHashSet<SymbolId>> = FxHashMap::default();
     let mut needed_exports: FxHashMap<ModuleIdx, FxHashSet<String>> = FxHashMap::default();
     let mut whole_modules: FxHashSet<ModuleIdx> = FxHashSet::default();
@@ -79,7 +107,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
         &mut needed_exports,
         &mut whole_modules,
         &mut reasons,
-        &root_names,
+        root_names,
     );
     propagate_entry_retained_dependencies(
         entry,
@@ -89,7 +117,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
         &mut needed_exports,
         &mut whole_modules,
         &mut reasons,
-        &root_names,
+        root_names,
     );
 
     let mut changed = true;
@@ -100,7 +128,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
             &mut needed_exports,
             &mut reasons,
             scan_result,
-            &root_names,
+            root_names,
         );
 
         let mut next_symbol_kinds: FxHashMap<
@@ -182,7 +210,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
                 module_idx,
                 reason,
                 scan_result,
-                &root_names,
+                root_names,
             );
         }
 
@@ -193,7 +221,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
                 module_idx,
                 symbol_id,
                 reason,
-                &root_names,
+                root_names,
             );
         }
 
@@ -206,7 +234,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
                 module_idx,
                 &name,
                 reason,
-                &root_names,
+                root_names,
             );
         }
     }
