@@ -111,11 +111,18 @@ impl NeededNamesPlan {
     }
 }
 
-pub struct LinkOutput {
+/// Global link-stage output computed once across all entries.
+pub struct LinkStageOutput {
     pub rename_plan: RenamePlan,
-    pub needed_names_plan: NeededNamesPlan,
     pub default_export_names: FxHashMap<ModuleIdx, String>,
+    pub reserved_decl_names: FxHashSet<String>,
+    pub all_module_aliases: FxHashMap<(ModuleIdx, SymbolId), ModuleIdx>,
     pub warnings: Vec<OxcDiagnostic>,
+}
+
+/// Per-entry link data containing only the needed names plan for the entry.
+pub struct PerEntryLinkData {
+    pub needed_names_plan: NeededNamesPlan,
 }
 
 impl RenamePlan {
