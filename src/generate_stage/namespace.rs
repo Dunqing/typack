@@ -173,7 +173,7 @@ pub(super) fn apply_namespace_wrap_renames(
     }
 }
 
-pub(super) fn collect_reserved_decl_names(
+pub fn collect_reserved_decl_names(
     scan_result: &ScanResult<'_>,
     rename_plan: &RenamePlan,
 ) -> FxHashSet<String> {

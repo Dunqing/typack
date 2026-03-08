@@ -121,13 +121,9 @@ pub struct LinkStageOutput {
     pub warnings: Vec<OxcDiagnostic>,
 }
 
-/// Per-entry link data (will be slimmed down to only `needed_names_plan` in a
-/// later stage; currently retains all fields for compatibility).
+/// Per-entry link data containing only the needed names plan for the entry.
 pub struct PerEntryLinkData {
-    pub rename_plan: RenamePlan,
     pub needed_names_plan: NeededNamesPlan,
-    pub default_export_names: FxHashMap<ModuleIdx, String>,
-    pub warnings: Vec<OxcDiagnostic>,
 }
 
 impl RenamePlan {

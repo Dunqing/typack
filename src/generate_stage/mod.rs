@@ -6,7 +6,7 @@
 //! codegen output into a single declaration file.
 
 mod emit;
-mod namespace;
+pub mod namespace;
 mod output_assembler;
 mod rewriter;
 mod sourcemap;
@@ -34,7 +34,9 @@ use crate::helpers::collect_decl_names;
 use crate::link_stage::exports::{
     find_external_reexport_source, resolve_export_local_name, resolve_export_origin,
 };
-use crate::link_stage::{NeededKindFlags, RenamePlan, build_link_output_for_entry};
+use crate::link_stage::{
+    NeededKindFlags, RenamePlan, build_per_entry_link_data, resolve_default_export_name,
+};
 use crate::scan_stage::ScanResult;
 use crate::types::{Module, ModuleIdx};
 use namespace::{
@@ -82,8 +84,20 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         let mut output = OutputAssembler::default();
         let mut acc = GenerateAcc::default();
         let rename_plan = std::mem::take(&mut self.rename_plan);
-        let mut link_output =
-            build_link_output_for_entry(self.scan_result, self.entry_idx, rename_plan);
+        let per_entry = build_per_entry_link_data(self.scan_result, self.entry_idx);
+
+        // Temporary: compute default_export_names locally until Stage 3 moves it to LinkStageOutput
+        let mut default_export_names: FxHashMap<ModuleIdx, String> = FxHashMap::default();
+        for module in &self.scan_result.modules {
+            if let Some(name) = resolve_default_export_name(module.idx, self.scan_result) {
+                default_export_names.insert(module.idx, name);
+            }
+        }
+
+        // Temporary: compute link warnings locally until Stage 3 moves them to LinkStageOutput
+        let mut link_warnings =
+            crate::link_stage::warnings::collect_link_warnings(&rename_plan, self.scan_result);
+        link_warnings.extend(crate::link_stage::build_resolved_exports(self.scan_result));
 
         // Collect and deduplicate reference directives from all modules
         let mut seen_set: FxHashSet<&str> = FxHashSet::default();
@@ -104,13 +118,8 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             pre_scan_namespace_info(self.scan_result, self.entry_idx);
 
         // Keep namespace wrapper exports aligned with semantic renames.
-        apply_namespace_wrap_renames(
-            &mut namespace_wraps,
-            &link_output.rename_plan,
-            self.scan_result,
-        );
-        let reserved_decl_names =
-            collect_reserved_decl_names(self.scan_result, &link_output.rename_plan);
+        apply_namespace_wrap_renames(&mut namespace_wraps, &rename_plan, self.scan_result);
+        let reserved_decl_names = collect_reserved_decl_names(self.scan_result, &rename_plan);
         deconflict_namespace_wrap_names(
             &mut namespace_wraps,
             &reserved_decl_names,
@@ -124,9 +133,9 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         let shared = GenerateSharedCtx {
             namespace_wraps: &namespace_wraps,
             namespace_aliases: &namespace_aliases,
-            rename_plan: &link_output.rename_plan,
-            needed_symbol_kinds: &link_output.needed_names_plan.symbol_kinds,
-            default_export_names: &link_output.default_export_names,
+            rename_plan: &rename_plan,
+            needed_symbol_kinds: &per_entry.needed_names_plan.symbol_kinds,
+            default_export_names: &default_export_names,
             helper_reserved_names: &helper_reserved_names,
         };
 
@@ -206,8 +215,8 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             generated.code.pop();
         }
 
-        link_output.warnings.extend(acc.warnings);
-        generated.warnings = link_output.warnings;
+        link_warnings.extend(acc.warnings);
+        generated.warnings = link_warnings;
         generated
     }
 

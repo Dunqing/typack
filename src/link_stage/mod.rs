@@ -6,8 +6,11 @@ mod needed_names;
 mod rename;
 pub mod resolved_exports;
 mod types;
-mod warnings;
+pub mod warnings;
 
+use oxc_ast::ast::Statement;
+use oxc_diagnostics::OxcDiagnostic;
+use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::scan_stage::ScanResult;
@@ -20,19 +23,72 @@ pub use resolved_exports::build_resolved_exports;
 pub use types::NeededKindFlags;
 #[cfg(test)]
 use types::NeededNamesPlan;
-#[expect(unused_imports)]
 pub use types::{LinkStageOutput, PerEntryLinkData, RenamePlan};
 
 use warnings::collect_link_warnings;
 
-/// Build link output for a single entry point.
+/// Build global link-stage output computed once across all entries.
+///
+/// Computes default export names, module aliases, reserved declaration names,
+/// and link warnings that are shared across all entry points.
+#[expect(dead_code)]
+pub fn build_link_stage_output(
+    scan_result: &ScanResult<'_>,
+    rename_plan: RenamePlan,
+) -> LinkStageOutput {
+    // Build default_export_names for all modules
+    let mut default_export_names: FxHashMap<ModuleIdx, String> = FxHashMap::default();
+    for module in &scan_result.modules {
+        if let Some(name) = resolve_default_export_name(module.idx, scan_result) {
+            default_export_names.insert(module.idx, name);
+        }
+    }
+
+    // Collect link warnings
+    let mut warnings: Vec<OxcDiagnostic> = collect_link_warnings(&rename_plan, scan_result);
+    warnings.extend(build_resolved_exports(scan_result));
+
+    // Collect reserved declaration names
+    let reserved_decl_names =
+        crate::generate_stage::namespace::collect_reserved_decl_names(scan_result, &rename_plan);
+
+    // Compute all_module_aliases by scanning all modules for ImportNamespaceSpecifier
+    let mut all_module_aliases: FxHashMap<(ModuleIdx, SymbolId), ModuleIdx> = FxHashMap::default();
+    for module in &scan_result.modules {
+        for stmt in &module.program.body {
+            if let Statement::ImportDeclaration(import_decl) = stmt
+                && let Some(specifiers) = &import_decl.specifiers
+            {
+                for spec in specifiers {
+                    if let oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) =
+                        spec
+                        && let Some(target_idx) =
+                            module.resolve_internal_specifier(import_decl.source.value.as_str())
+                        && let Some(symbol_id) = ns.local.symbol_id.get()
+                    {
+                        all_module_aliases.insert((module.idx, symbol_id), target_idx);
+                    }
+                }
+            }
+        }
+    }
+
+    LinkStageOutput {
+        rename_plan,
+        default_export_names,
+        reserved_decl_names,
+        all_module_aliases,
+        warnings,
+    }
+}
+
+/// Build per-entry link data for a single entry point.
 ///
 /// Computes needed names for just the specified entry, enabling per-entry
 /// output generation without re-scanning.
-pub fn build_link_output_for_entry(
+pub fn build_per_entry_link_data(
     scan_result: &ScanResult<'_>,
     entry_idx: ModuleIdx,
-    rename_plan: RenamePlan,
 ) -> PerEntryLinkData {
     let mut needed_names_plan = build_needed_names(&scan_result.modules[entry_idx], scan_result);
 
@@ -57,17 +113,7 @@ pub fn build_link_output_for_entry(
         }
     }
 
-    let mut default_export_names: FxHashMap<ModuleIdx, String> = FxHashMap::default();
-    for module in &scan_result.modules {
-        if let Some(name) = resolve_default_export_name(module.idx, scan_result) {
-            default_export_names.insert(module.idx, name);
-        }
-    }
-
-    let mut warnings = collect_link_warnings(&rename_plan, scan_result);
-    warnings.extend(build_resolved_exports(scan_result));
-
-    PerEntryLinkData { rename_plan, needed_names_plan, default_export_names, warnings }
+    PerEntryLinkData { needed_names_plan }
 }
 
 #[cfg(test)]
