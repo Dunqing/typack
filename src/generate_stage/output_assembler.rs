@@ -49,5 +49,5 @@ impl OutputAssembler {
 }
 
 fn count_newlines(text: &str) -> u32 {
-    text.match_indices('\n').fold(0u32, |count, _| count.saturating_add(1))
+    u32::try_from(text.matches('\n').count()).unwrap_or(u32::MAX)
 }
