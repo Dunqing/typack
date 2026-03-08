@@ -31,7 +31,6 @@ use warnings::collect_link_warnings;
 ///
 /// Computes default export names, module aliases, reserved declaration names,
 /// and link warnings that are shared across all entry points.
-#[expect(dead_code)]
 pub fn build_link_stage_output(
     scan_result: &ScanResult<'_>,
     rename_plan: RenamePlan,

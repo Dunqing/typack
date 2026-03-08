@@ -20,7 +20,7 @@ use oxc_allocator::Allocator;
 use oxc_diagnostics::OxcDiagnostic;
 
 use crate::generate_stage::GenerateStage;
-use crate::link_stage::build_rename_plan;
+use crate::link_stage::{build_link_stage_output, build_rename_plan};
 use crate::scan_stage::ScanStage;
 
 /// A single bundled output for one entry point.
@@ -66,17 +66,19 @@ impl TypackBundler {
         let mut all_outputs = Vec::with_capacity(options.input.len());
         let entry_indices = scan_result.entry_indices.clone();
         let rename_plan = build_rename_plan(&scan_result);
+        let link_output = build_link_stage_output(&scan_result, rename_plan);
+        all_warnings.extend(link_output.warnings.iter().cloned());
 
         for &entry_idx in &entry_indices {
             let generated = {
-                let mut stage = GenerateStage::new(
-                    &mut scan_result,
+                let stage = GenerateStage::new(
+                    &scan_result,
                     entry_idx,
                     &allocator,
                     options.sourcemap,
                     options.cjs_default,
                     &options.cwd,
-                    rename_plan.clone(),
+                    &link_output,
                 );
                 stage.generate()
             };

@@ -34,15 +34,12 @@ use crate::helpers::collect_decl_names;
 use crate::link_stage::exports::{
     find_external_reexport_source, resolve_export_local_name, resolve_export_origin,
 };
-use crate::link_stage::{
-    NeededKindFlags, RenamePlan, build_per_entry_link_data, resolve_default_export_name,
-};
+use crate::link_stage::{LinkStageOutput, NeededKindFlags, RenamePlan, build_per_entry_link_data};
 use crate::scan_stage::ScanResult;
 use crate::types::{Module, ModuleIdx};
 use namespace::{
     apply_namespace_wrap_renames, collect_declaration_names, collect_export_specifier,
-    collect_module_exports, collect_reserved_decl_names, deconflict_namespace_wrap_names,
-    pre_scan_namespace_info,
+    collect_module_exports, deconflict_namespace_wrap_names, pre_scan_namespace_info,
 };
 use output_assembler::OutputAssembler;
 use rewriter::{InlineImportAndNamespaceRewriter, SemanticRenamer, ensure_declare_on_declaration};
@@ -50,13 +47,13 @@ use types::*;
 
 /// Generate stage: produces the bundled `.d.ts` output.
 pub struct GenerateStage<'a, 'b> {
-    scan_result: &'b mut ScanResult<'a>,
+    scan_result: &'b ScanResult<'a>,
     entry_idx: ModuleIdx,
     allocator: &'a Allocator,
     sourcemap: bool,
     cjs_default: bool,
     cwd: &'b Path,
-    rename_plan: RenamePlan,
+    link_output: &'b LinkStageOutput,
 }
 
 /// Output from generate stage.
@@ -68,36 +65,23 @@ pub struct GenerateOutput {
 
 impl<'a, 'b> GenerateStage<'a, 'b> {
     pub fn new(
-        scan_result: &'b mut ScanResult<'a>,
+        scan_result: &'b ScanResult<'a>,
         entry_idx: ModuleIdx,
         allocator: &'a Allocator,
         sourcemap: bool,
         cjs_default: bool,
         cwd: &'b Path,
-        rename_plan: RenamePlan,
+        link_output: &'b LinkStageOutput,
     ) -> Self {
-        Self { scan_result, entry_idx, allocator, sourcemap, cjs_default, cwd, rename_plan }
+        Self { scan_result, entry_idx, allocator, sourcemap, cjs_default, cwd, link_output }
     }
 
     /// Generate the bundled `.d.ts` output.
-    pub fn generate(&mut self) -> GenerateOutput {
+    pub fn generate(&self) -> GenerateOutput {
         let mut output = OutputAssembler::default();
         let mut acc = GenerateAcc::default();
-        let rename_plan = std::mem::take(&mut self.rename_plan);
+        let rename_plan = &self.link_output.rename_plan;
         let per_entry = build_per_entry_link_data(self.scan_result, self.entry_idx);
-
-        // Temporary: compute default_export_names locally until Stage 3 moves it to LinkStageOutput
-        let mut default_export_names: FxHashMap<ModuleIdx, String> = FxHashMap::default();
-        for module in &self.scan_result.modules {
-            if let Some(name) = resolve_default_export_name(module.idx, self.scan_result) {
-                default_export_names.insert(module.idx, name);
-            }
-        }
-
-        // Temporary: compute link warnings locally until Stage 3 moves them to LinkStageOutput
-        let mut link_warnings =
-            crate::link_stage::warnings::collect_link_warnings(&rename_plan, self.scan_result);
-        link_warnings.extend(crate::link_stage::build_resolved_exports(self.scan_result));
 
         // Collect and deduplicate reference directives from all modules
         let mut seen_set: FxHashSet<&str> = FxHashSet::default();
@@ -114,18 +98,20 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         }
 
         // Pre-scan all modules for namespace import patterns
-        let (mut namespace_wraps, namespace_aliases) =
-            pre_scan_namespace_info(self.scan_result, self.entry_idx);
+        let (mut namespace_wraps, namespace_aliases) = pre_scan_namespace_info(
+            self.scan_result,
+            self.entry_idx,
+            &self.link_output.all_module_aliases,
+        );
 
         // Keep namespace wrapper exports aligned with semantic renames.
-        apply_namespace_wrap_renames(&mut namespace_wraps, &rename_plan, self.scan_result);
-        let reserved_decl_names = collect_reserved_decl_names(self.scan_result, &rename_plan);
+        apply_namespace_wrap_renames(&mut namespace_wraps, rename_plan, self.scan_result);
+        let mut helper_reserved_names = self.link_output.reserved_decl_names.clone();
         deconflict_namespace_wrap_names(
             &mut namespace_wraps,
-            &reserved_decl_names,
+            &helper_reserved_names,
             &mut acc.warnings,
         );
-        let mut helper_reserved_names = reserved_decl_names;
         for wrap in namespace_wraps.values() {
             helper_reserved_names.insert(wrap.namespace_name.clone());
         }
@@ -133,9 +119,9 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         let shared = GenerateSharedCtx {
             namespace_wraps: &namespace_wraps,
             namespace_aliases: &namespace_aliases,
-            rename_plan: &rename_plan,
+            rename_plan,
             needed_symbol_kinds: &per_entry.needed_names_plan.symbol_kinds,
-            default_export_names: &default_export_names,
+            default_export_names: &self.link_output.default_export_names,
             helper_reserved_names: &helper_reserved_names,
         };
 
@@ -215,8 +201,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             generated.code.pop();
         }
 
-        link_warnings.extend(acc.warnings);
-        generated.warnings = link_warnings;
+        generated.warnings = acc.warnings;
         generated
     }
 
@@ -232,7 +217,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
     }
 
     fn generate_module_ast(
-        &mut self,
+        &self,
         module_idx: ModuleIdx,
         shared: &GenerateSharedCtx<'_>,
         acc: &mut GenerateAcc,
@@ -548,7 +533,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         };
 
         let (comments, hashbang, directives) = {
-            let module = &mut self.scan_result.modules[module_idx];
+            let module = &self.scan_result.modules[module_idx];
             let raw_comments = module.program.comments.clone_in_with_semantic_ids(self.allocator);
             let comments = ast.vec_from_iter(raw_comments.into_iter().filter(|comment| {
                 let comment_text = comment.span.source_text(source_text).trim();

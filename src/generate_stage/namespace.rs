@@ -266,36 +266,19 @@ pub(super) fn deconflict_namespace_wrap_names(
 pub(super) fn pre_scan_namespace_info(
     scan_result: &ScanResult<'_>,
     entry_idx: ModuleIdx,
+    all_module_aliases: &FxHashMap<(ModuleIdx, SymbolId), ModuleIdx>,
 ) -> (FxHashMap<ModuleIdx, NamespaceWrapInfo>, FxHashMap<SymbolId, ModuleIdx>) {
     let entry = &scan_result.modules[entry_idx];
 
     let mut namespace_wraps: FxHashMap<ModuleIdx, NamespaceWrapInfo> = FxHashMap::default();
     // Entry-level namespace aliases: `import * as X` SymbolId → source module idx
     let mut namespace_aliases: FxHashMap<SymbolId, ModuleIdx> = FxHashMap::default();
-    // Per-module namespace aliases: (module idx, SymbolId) → target module idx
-    let mut all_module_aliases: FxHashMap<(ModuleIdx, SymbolId), ModuleIdx> = FxHashMap::default();
     let mut re_exported_names: Vec<SymbolId> = Vec::new();
 
-    // Scan all modules for namespace aliases (using stored ASTs)
-    for module in &scan_result.modules {
-        for stmt in &module.program.body {
-            if let Statement::ImportDeclaration(import_decl) = stmt
-                && let Some(specifiers) = &import_decl.specifiers
-            {
-                for spec in specifiers {
-                    if let oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) =
-                        spec
-                        && let Some(target_idx) =
-                            module.resolve_internal_specifier(import_decl.source.value.as_str())
-                        && let Some(symbol_id) = ns.local.symbol_id.get()
-                    {
-                        all_module_aliases.insert((module.idx, symbol_id), target_idx);
-                        if module.idx == entry_idx {
-                            namespace_aliases.insert(symbol_id, target_idx);
-                        }
-                    }
-                }
-            }
+    // Build entry-level namespace aliases from the pre-computed all_module_aliases
+    for (&(module_idx, symbol_id), &target_idx) in all_module_aliases {
+        if module_idx == entry_idx {
+            namespace_aliases.insert(symbol_id, target_idx);
         }
     }
 

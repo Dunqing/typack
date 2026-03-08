@@ -112,7 +112,6 @@ impl NeededNamesPlan {
 }
 
 /// Global link-stage output computed once across all entries.
-#[expect(dead_code)]
 pub struct LinkStageOutput {
     pub rename_plan: RenamePlan,
     pub default_export_names: FxHashMap<ModuleIdx, String>,
