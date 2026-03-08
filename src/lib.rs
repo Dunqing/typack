@@ -69,7 +69,6 @@ impl TypackBundler {
 
         let stage = GenerateStage::new(
             &scan_result,
-            &scan_result.entry_indices,
             &allocator,
             options.sourcemap,
             options.cjs_default,

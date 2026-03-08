@@ -48,7 +48,6 @@ use types::*;
 /// Generate stage: produces the bundled `.d.ts` output.
 pub struct GenerateStage<'a, 'b> {
     scan_result: &'b ScanResult<'a>,
-    entry_indices: &'b [ModuleIdx],
     allocator: &'a Allocator,
     sourcemap: bool,
     cjs_default: bool,
@@ -66,14 +65,13 @@ pub struct GenerateOutput {
 impl<'a, 'b> GenerateStage<'a, 'b> {
     pub fn new(
         scan_result: &'b ScanResult<'a>,
-        entry_indices: &'b [ModuleIdx],
         allocator: &'a Allocator,
         sourcemap: bool,
         cjs_default: bool,
         cwd: &'b Path,
         link_output: &'b LinkStageOutput,
     ) -> Self {
-        Self { scan_result, entry_indices, allocator, sourcemap, cjs_default, cwd, link_output }
+        Self { scan_result, allocator, sourcemap, cjs_default, cwd, link_output }
     }
 
     /// Generate the bundled `.d.ts` output for all entries.
@@ -89,7 +87,8 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             }
         }
 
-        self.entry_indices
+        self.scan_result
+            .entry_indices
             .iter()
             .map(|&entry_idx| self.generate_entry(entry_idx, &unique_directives))
             .collect()
