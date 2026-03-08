@@ -1,5 +1,7 @@
 # typack
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json&style=flat&label=CodSpeed)](https://codspeed.io/Dunqing/typack?utm_source=badge)
+
 **ty**(pe) + **pack** — pack your TypeScript declarations.
 
 A native TypeScript declaration (`.d.ts`) bundler built on [Oxc](https://oxc.rs).

@@ -32,10 +32,10 @@ fn conformance() {
     for dir in &dirs {
         let fixture_name = dir.file_name().unwrap().to_string_lossy().to_string();
 
-        if let Some(filter) = &fixture_filter {
-            if !fixture_name.contains(filter) {
-                continue;
-            }
+        if let Some(filter) = &fixture_filter
+            && !fixture_name.contains(filter)
+        {
+            continue;
         }
 
         let config_path = dir.join("config.json");
