@@ -237,124 +237,74 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             return None;
         }
 
-        let mut ns_aliases: FxHashSet<SymbolId> = FxHashSet::default();
-        let mut import_renames: FxHashMap<SymbolId, String> = FxHashMap::default();
-        // Map: external ns SymbolId → (source specifier, local name)
-        let mut external_ns_info: FxHashMap<SymbolId, (String, String)> = FxHashMap::default();
-        // Names re-exported via source-less `export { X }` in non-entry modules.
-        // These imported bindings must survive import pruning because other
-        // modules reference them through the re-export chain.
-        let mut reexported_import_names: FxHashSet<String> = FxHashSet::default();
-        {
-            let module = &self.scan_result.modules[module_idx];
-            for stmt in &module.program.body {
-                // Collect local names from `export { X }` (no source) for non-entry
-                // modules. When X was imported from an external package, the import
-                // must be preserved even though X isn't used in local declarations.
-                if !module.is_entry
-                    && let Statement::ExportNamedDeclaration(decl) = stmt
-                    && decl.source.is_none()
-                    && decl.declaration.is_none()
-                {
-                    for spec in &decl.specifiers {
-                        reexported_import_names.insert(spec.local.name().to_string());
-                    }
-                }
-                if let Statement::ImportDeclaration(import_decl) = stmt
-                    && let Some(specifiers) = &import_decl.specifiers
-                {
-                    let is_internal = module
-                        .resolve_internal_specifier(import_decl.source.value.as_str())
-                        .is_some();
+        // Phase 1: Read-only analysis — determine per-statement actions and
+        // collect exports, imports, star exports directly into acc without
+        // cloning any AST nodes.
+        let exports_start = acc.exports.len();
+        let imports_start = acc.imports.len();
+        let analysis = self.analyze_module(module_idx, module_needed.as_ref(), shared, acc);
 
-                    if let Some(source_idx) =
-                        module.resolve_internal_specifier(import_decl.source.value.as_str())
-                    {
-                        // Internal import processing
-                        let source_module = &self.scan_result.modules[source_idx];
-                        for spec in specifiers {
-                            match spec {
-                                oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(
-                                    ns,
-                                ) => {
-                                    if let Some(symbol_id) = ns.local.symbol_id.get() {
-                                        ns_aliases.insert(symbol_id);
-                                    }
-                                }
-                                oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) => {
-                                    let imported_alias = s.imported.name().to_string();
-                                    let local_name =
-                                        resolve_export_local_name(source_module, &imported_alias)
-                                            .unwrap_or(imported_alias);
-                                    let resolved_imported = shared
-                                        .rename_plan
-                                        .resolve_name(source_module, &local_name)
-                                        .map_or(local_name, ToString::to_string);
-                                    if s.local.name.as_str() != resolved_imported
-                                        && let Some(symbol_id) = s.local.symbol_id.get()
-                                    {
-                                        import_renames.insert(symbol_id, resolved_imported);
-                                    }
-                                }
-                                oxc_ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(
-                                    def,
-                                ) => {
-                                    if let Some(mut actual_name) =
-                                        shared.default_export_names.get(&source_module.idx).cloned()
-                                    {
-                                        if let Some(renamed) =
-                                            shared.rename_plan.resolve_name(source_module, &actual_name)
-                                        {
-                                            actual_name = renamed.to_string();
-                                        }
-                                        if def.local.name.as_str() != actual_name
-                                            && let Some(symbol_id) = def.local.symbol_id.get()
-                                        {
-                                            import_renames.insert(symbol_id, actual_name);
-                                        }
-                                    }
-                                }
+        // Phase 2: Selective clone + transform — only clone statements that
+        // survive tree-shaking, and for unwrapped exports clone only the inner
+        // declaration (not the export wrapper).
+        let ast = AstBuilder::new(self.allocator);
+        let mut transformed_body = ast.vec();
+        let module = &self.scan_result.modules[module_idx];
+
+        for (i, action) in analysis.statement_actions.iter().enumerate() {
+            match action {
+                StatementAction::Skip => {}
+                StatementAction::Include => {
+                    let stmt = module.program.body[i].clone_in_with_semantic_ids(self.allocator);
+                    transformed_body.push(stmt);
+                }
+                StatementAction::UnwrapExportDeclaration => {
+                    let Statement::ExportNamedDeclaration(export) = &module.program.body[i] else {
+                        unreachable!()
+                    };
+                    let mut decl = export
+                        .declaration
+                        .as_ref()
+                        .unwrap()
+                        .clone_in_with_semantic_ids(self.allocator);
+                    ensure_declare_on_declaration(&mut decl);
+                    decl.span_mut().start = export.span.start;
+                    transformed_body.push(Statement::from(decl));
+                }
+                StatementAction::UnwrapExportDefault => {
+                    let Statement::ExportDefaultDeclaration(export_default) =
+                        &module.program.body[i]
+                    else {
+                        unreachable!()
+                    };
+                    let declaration =
+                        export_default.declaration.clone_in_with_semantic_ids(self.allocator);
+                    match declaration {
+                        ExportDefaultDeclarationKind::FunctionDeclaration(mut func_decl) => {
+                            func_decl.span.start = export_default.span.start;
+                            if func_decl.id.is_none() {
+                                func_decl.id = Some(ast.binding_identifier(SPAN, "export_default"));
                             }
+                            func_decl.declare = true;
+                            transformed_body.push(Statement::FunctionDeclaration(func_decl));
                         }
-                    } else if !is_internal {
-                        // External import — collect namespace specifiers
-                        for spec in specifiers {
-                            if let oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(
-                                ns,
-                            ) = spec
-                                && let Some(symbol_id) = ns.local.symbol_id.get()
-                            {
-                                ns_aliases.insert(symbol_id);
-                                external_ns_info.insert(
-                                    symbol_id,
-                                    (
-                                        import_decl.source.value.to_string(),
-                                        ns.local.name.to_string(),
-                                    ),
-                                );
+                        ExportDefaultDeclarationKind::ClassDeclaration(mut class_decl) => {
+                            class_decl.span.start = export_default.span.start;
+                            if class_decl.id.is_none() {
+                                class_decl.id =
+                                    Some(ast.binding_identifier(SPAN, "export_default"));
                             }
+                            class_decl.declare = true;
+                            transformed_body.push(Statement::ClassDeclaration(class_decl));
                         }
+                        ExportDefaultDeclarationKind::TSInterfaceDeclaration(mut iface_decl) => {
+                            iface_decl.span.start = export_default.span.start;
+                            transformed_body.push(Statement::TSInterfaceDeclaration(iface_decl));
+                        }
+                        _ => {}
                     }
                 }
             }
-        }
-
-        let ast = AstBuilder::new(self.allocator);
-        let mut transformed_body = ast.vec();
-        let exports_start = acc.exports.len();
-        let imports_start = acc.imports.len();
-        let module = &self.scan_result.modules[module_idx];
-        let mut input_body = module.program.body.clone_in_with_semantic_ids(self.allocator);
-        for stmt in input_body.drain(..) {
-            let module = &self.scan_result.modules[module_idx];
-            self.process_statement_ast(
-                stmt,
-                ast,
-                &mut transformed_body,
-                ModuleTransformCtx { module, needed_symbol_kinds: module_needed.as_ref() },
-                shared,
-                acc,
-            );
         }
 
         if transformed_body.is_empty() && ns_wrap.is_none() {
@@ -363,16 +313,15 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
 
         // Apply semantic renames (symbol renames from link stage + import renames).
         apply_semantic_renames(
-            &self.scan_result.modules[module_idx],
+            module,
             self.allocator,
             shared.rename_plan,
-            &import_renames,
+            &analysis.import_renames,
             &mut transformed_body,
         );
 
         // AST-level import-type rewriting and namespace alias flattening.
         let external_ns_members = {
-            let module = &self.scan_result.modules[module_idx];
             let mut rewriter = InlineImportAndNamespaceRewriter {
                 ast,
                 module,
@@ -380,8 +329,8 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                 ns_name_map: &mut acc.ns_name_map,
                 scan_result: self.scan_result,
                 ns_wrapper_output: &mut acc.ns_wrapper_blocks,
-                namespace_aliases: ns_aliases,
-                external_ns_info: &external_ns_info,
+                namespace_aliases: analysis.ns_aliases,
+                external_ns_info: &analysis.external_ns_info,
                 external_ns_members: FxHashMap::default(),
                 helper_reserved_names: shared.helper_reserved_names,
                 warnings: &mut acc.warnings,
@@ -395,7 +344,8 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         // Convert external namespace imports to named imports based on
         // member accesses recorded during the rewrite pass.
         for (specifier, members) in &external_ns_members {
-            let ns_local = external_ns_info
+            let ns_local = analysis
+                .external_ns_info
                 .values()
                 .find(|(spec, _)| spec == specifier)
                 .map(|(_, local)| local.as_str());
@@ -451,75 +401,15 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             }
         }
 
-        let referenced_names = {
-            let mut collector = ReferencedNameCollector::new();
-            for stmt in &transformed_body {
-                collector.visit_statement(stmt);
-            }
-            collector.finish()
-        };
-        let module_exported_locals: FxHashSet<String> =
-            acc.exports[exports_start..].iter().map(|export| export.local.clone()).collect();
-
-        // Drop TypeScript-generated external namespace helpers whose only
-        // usages were inside tree-shaken declarations. Keep user-authored
-        // namespace imports (for example `import * as http`) to preserve the
-        // plugin's current snapshot semantics.
-        if !external_ns_info.is_empty() {
-            for (specifier, local_name) in external_ns_info.values() {
-                if referenced_names.contains(local_name)
-                    || module_exported_locals.contains(local_name.as_str())
-                    || !is_generated_external_namespace_helper(local_name)
-                {
-                    continue;
-                }
-
-                if let Some(idx) = acc.imports.iter().position(|i| {
-                    i.source == *specifier
-                        && i.specifiers.iter().any(|s| {
-                            matches!(s.kind, ImportSpecifierKind::Namespace)
-                                && s.local == *local_name
-                        })
-                }) {
-                    acc.imports[idx].specifiers.retain(|s| {
-                        !(matches!(s.kind, ImportSpecifierKind::Namespace)
-                            && s.local == *local_name)
-                    });
-                    if acc.imports[idx].specifiers.is_empty() {
-                        acc.imports.remove(idx);
-                    }
-                }
-            }
-        }
-
-        // Drop external named/default imports that no longer have any
-        // remaining references after tree-shaking. This uses syntax names from
-        // the transformed AST so it stays valid after AST mutation.
-        // Imports created from `export { ... } from "ext"` re-exports are
-        // exempt: they already survived statement-level tree-shaking.
-        for import in &mut acc.imports[imports_start..] {
-            if import.from_reexport {
-                continue;
-            }
-            import.specifiers.retain(|specifier| match specifier.kind {
-                ImportSpecifierKind::Namespace => true,
-                ImportSpecifierKind::Default | ImportSpecifierKind::Named(_) => {
-                    referenced_names.contains(specifier.local.as_str())
-                        || module_exported_locals.contains(specifier.local.as_str())
-                        || reexported_import_names.contains(specifier.local.as_str())
-                }
-            });
-        }
-        let mut import_idx = imports_start;
-        while import_idx < acc.imports.len() {
-            if acc.imports[import_idx].side_effect_only
-                || !acc.imports[import_idx].specifiers.is_empty()
-            {
-                import_idx += 1;
-            } else {
-                acc.imports.remove(import_idx);
-            }
-        }
+        // Phase 3: Prune unused imports.
+        prune_unused_imports(
+            &mut acc.imports,
+            imports_start,
+            &transformed_body,
+            &acc.exports[exports_start..],
+            &analysis.reexported_import_names,
+            &analysis.external_ns_info,
+        );
 
         let (relative_path, program_span, source_type, source_text, reference_directive_set) = {
             let module = &self.scan_result.modules[module_idx];
@@ -613,33 +503,146 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         })
     }
 
-    fn process_statement_ast(
+    /// Read-only analysis phase: walks the original AST without cloning,
+    /// determines what action to take for each statement, and collects
+    /// exports, imports, star exports, and import rename info.
+    fn analyze_module(
         &self,
-        stmt: Statement<'a>,
-        ast: AstBuilder<'a>,
-        output: &mut oxc_allocator::Vec<'a, Statement<'a>>,
-        module_ctx: ModuleTransformCtx<'_, 'a>,
+        module_idx: ModuleIdx,
+        needed_symbol_kinds: Option<&FxHashMap<SymbolId, NeededKindFlags>>,
         shared: &GenerateSharedCtx<'_>,
         acc: &mut GenerateAcc,
-    ) {
-        let ModuleTransformCtx { module, needed_symbol_kinds } = module_ctx;
-        match stmt {
-            Statement::ExportNamedDeclaration(mut export_decl) => {
-                acc.has_any_export_statement = true;
-                if let Some(mut decl) = export_decl.declaration.take() {
-                    if let Some(needed) = needed_symbol_kinds
-                        && !declaration_matches_needed_kinds(&decl, &module.scoping, needed)
-                    {
-                        return;
-                    }
-                    ensure_declare_on_declaration(&mut decl);
-                    // Inherit the export statement's span start so comments attached
-                    // to `export` naturally attach to the unwrapped declaration.
-                    decl.span_mut().start = export_decl.span.start;
+    ) -> ModuleAnalysis {
+        let module = &self.scan_result.modules[module_idx];
+        let mut analysis = ModuleAnalysis {
+            statement_actions: Vec::with_capacity(module.program.body.len()),
+            import_renames: FxHashMap::default(),
+            ns_aliases: FxHashSet::default(),
+            external_ns_info: FxHashMap::default(),
+            reexported_import_names: FxHashSet::default(),
+        };
 
+        // Pre-scan: collect import renames, ns aliases, external ns info,
+        // and reexported import names.
+        for stmt in &module.program.body {
+            // Collect local names from `export { X }` (no source) for non-entry
+            // modules. When X was imported from an external package, the import
+            // must be preserved even though X isn't used in local declarations.
+            if !module.is_entry
+                && let Statement::ExportNamedDeclaration(decl) = stmt
+                && decl.source.is_none()
+                && decl.declaration.is_none()
+            {
+                for spec in &decl.specifiers {
+                    analysis.reexported_import_names.insert(spec.local.name().to_string());
+                }
+            }
+            if let Statement::ImportDeclaration(import_decl) = stmt
+                && let Some(specifiers) = &import_decl.specifiers
+            {
+                let is_internal =
+                    module.resolve_internal_specifier(import_decl.source.value.as_str()).is_some();
+
+                if let Some(source_idx) =
+                    module.resolve_internal_specifier(import_decl.source.value.as_str())
+                {
+                    // Internal import processing
+                    let source_module = &self.scan_result.modules[source_idx];
+                    for spec in specifiers {
+                        match spec {
+                            oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(
+                                ns,
+                            ) => {
+                                if let Some(symbol_id) = ns.local.symbol_id.get() {
+                                    analysis.ns_aliases.insert(symbol_id);
+                                }
+                            }
+                            oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                                let imported_alias = s.imported.name().to_string();
+                                let local_name =
+                                    resolve_export_local_name(source_module, &imported_alias)
+                                        .unwrap_or(imported_alias);
+                                let resolved_imported = shared
+                                    .rename_plan
+                                    .resolve_name(source_module, &local_name)
+                                    .map_or(local_name, ToString::to_string);
+                                if s.local.name.as_str() != resolved_imported
+                                    && let Some(symbol_id) = s.local.symbol_id.get()
+                                {
+                                    analysis.import_renames.insert(symbol_id, resolved_imported);
+                                }
+                            }
+                            oxc_ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(
+                                def,
+                            ) => {
+                                if let Some(mut actual_name) =
+                                    shared.default_export_names.get(&source_module.idx).cloned()
+                                {
+                                    if let Some(renamed) =
+                                        shared.rename_plan.resolve_name(source_module, &actual_name)
+                                    {
+                                        actual_name = renamed.to_string();
+                                    }
+                                    if def.local.name.as_str() != actual_name
+                                        && let Some(symbol_id) = def.local.symbol_id.get()
+                                    {
+                                        analysis.import_renames.insert(symbol_id, actual_name);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if !is_internal {
+                    // External import — collect namespace specifiers
+                    for spec in specifiers {
+                        if let oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(
+                            ns,
+                        ) = spec
+                            && let Some(symbol_id) = ns.local.symbol_id.get()
+                        {
+                            analysis.ns_aliases.insert(symbol_id);
+                            analysis.external_ns_info.insert(
+                                symbol_id,
+                                (import_decl.source.value.to_string(), ns.local.name.to_string()),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Determine per-statement actions and collect exports/imports/star_exports
+        // directly into acc.
+        for stmt in &module.program.body {
+            let action = self.analyze_statement(stmt, module, needed_symbol_kinds, shared, acc);
+            analysis.statement_actions.push(action);
+        }
+
+        analysis
+    }
+
+    /// Determine the action for a single statement and collect any side-effect
+    /// metadata (exports, imports, star exports) directly into `acc`.
+    fn analyze_statement(
+        &self,
+        stmt: &Statement<'a>,
+        module: &Module<'a>,
+        needed_symbol_kinds: Option<&FxHashMap<SymbolId, NeededKindFlags>>,
+        shared: &GenerateSharedCtx<'_>,
+        acc: &mut GenerateAcc,
+    ) -> StatementAction {
+        match stmt {
+            Statement::ExportNamedDeclaration(export_decl) => {
+                acc.has_any_export_statement = true;
+                if let Some(decl) = &export_decl.declaration {
+                    if let Some(needed) = needed_symbol_kinds
+                        && !declaration_matches_needed_kinds(decl, &module.scoping, needed)
+                    {
+                        return StatementAction::Skip;
+                    }
                     if module.is_entry {
                         let before_len = acc.exports.len();
-                        collect_declaration_names(&decl, &mut acc.exports);
+                        collect_declaration_names(decl, &mut acc.exports);
                         for exp in &mut acc.exports[before_len..] {
                             if let Some(new_name) =
                                 shared.rename_plan.resolve_name(module, &exp.local)
@@ -648,7 +651,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                             }
                         }
                     }
-                    output.push(Statement::from(decl));
+                    StatementAction::UnwrapExportDeclaration
                 } else if let Some(source) = &export_decl.source {
                     let internal_source_idx =
                         module.resolve_internal_specifier(source.value.as_str());
@@ -684,9 +687,6 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                             if let Some(source_module_idx) = internal_source_idx {
                                 let mut local_name = spec.local.name().to_string();
                                 let mut local_module_idx = source_module_idx;
-                                // Resolve through the source module's export aliases:
-                                // e.g. source has `export { createBaseVNode as createElementVNode }`,
-                                // map "createElementVNode" → "createBaseVNode"
                                 if let Some((origin_module_idx, resolved)) = resolve_export_origin(
                                     source_module_idx,
                                     &local_name,
@@ -701,7 +701,6 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                                         self.scan_result,
                                     )
                                 {
-                                    // External passthrough re-export: generate import
                                     acc.imports.push(ExternalImport {
                                         source: ext_source,
                                         specifiers: vec![ImportSpecifier {
@@ -746,110 +745,100 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                             }
                         }
                     }
-                } else if module.is_entry {
-                    for spec in &export_decl.specifiers {
-                        let exported_name = spec.exported.name().to_string();
-                        let spec_is_type =
-                            export_decl.export_kind.is_type() || spec.export_kind.is_type();
-                        let symbol_id =
-                            module.scoping.get_root_binding(Ident::from(spec.local.name()));
-                        if let Some(symbol_id) = symbol_id
-                            && let Some(source_module_idx) =
-                                shared.namespace_aliases.get(&symbol_id)
-                            && let Some(wrap) = shared.namespace_wraps.get(source_module_idx)
-                        {
-                            acc.exports.push(ExportedName {
-                                local: wrap.namespace_name.clone(),
-                                exported: exported_name,
-                                is_type_only: spec_is_type,
-                            });
-                        } else {
-                            let before_len = acc.exports.len();
-                            collect_export_specifier(spec, &mut acc.exports, spec_is_type);
-                            for exp in &mut acc.exports[before_len..] {
-                                if let Some(new_name) =
-                                    shared.rename_plan.resolve_name(module, &exp.local)
-                                {
-                                    exp.local = new_name.to_string();
+                    StatementAction::Skip
+                } else {
+                    // Bare specifiers: `export { X, Y }`
+                    if module.is_entry {
+                        for spec in &export_decl.specifiers {
+                            let exported_name = spec.exported.name().to_string();
+                            let spec_is_type =
+                                export_decl.export_kind.is_type() || spec.export_kind.is_type();
+                            let symbol_id =
+                                module.scoping.get_root_binding(Ident::from(spec.local.name()));
+                            if let Some(symbol_id) = symbol_id
+                                && let Some(source_module_idx) =
+                                    shared.namespace_aliases.get(&symbol_id)
+                                && let Some(wrap) = shared.namespace_wraps.get(source_module_idx)
+                            {
+                                acc.exports.push(ExportedName {
+                                    local: wrap.namespace_name.clone(),
+                                    exported: exported_name,
+                                    is_type_only: spec_is_type,
+                                });
+                            } else {
+                                let before_len = acc.exports.len();
+                                collect_export_specifier(spec, &mut acc.exports, spec_is_type);
+                                for exp in &mut acc.exports[before_len..] {
+                                    if let Some(new_name) =
+                                        shared.rename_plan.resolve_name(module, &exp.local)
+                                    {
+                                        exp.local = new_name.to_string();
+                                    }
                                 }
                             }
                         }
                     }
+                    StatementAction::Skip
                 }
             }
             Statement::ExportDefaultDeclaration(export_default) => {
                 acc.has_any_export_statement = true;
                 if let Some(needed) = needed_symbol_kinds
                     && !export_default_declaration_matches_needed_kinds(
-                        &export_default,
+                        export_default,
                         &module.scoping,
                         needed,
                     )
                 {
-                    return;
+                    return StatementAction::Skip;
                 }
-                let declaration =
-                    export_default.declaration.clone_in_with_semantic_ids(self.allocator);
-                match declaration {
-                    ExportDefaultDeclarationKind::FunctionDeclaration(mut func_decl) => {
-                        func_decl.span.start = export_default.span.start;
-                        let name = if let Some(id) = &func_decl.id {
-                            id.name.to_string()
-                        } else {
-                            func_decl.id = Some(ast.binding_identifier(SPAN, "export_default"));
-                            "export_default".to_string()
-                        };
-                        func_decl.declare = true;
-                        output.push(Statement::FunctionDeclaration(func_decl));
+                match &export_default.declaration {
+                    ExportDefaultDeclarationKind::FunctionDeclaration(func_decl) => {
+                        let name =
+                            func_decl.id.as_ref().map_or("export_default", |id| id.name.as_str());
                         if module.is_entry {
                             acc.exports.push(ExportedName {
-                                local: name,
+                                local: name.to_string(),
                                 exported: "default".to_string(),
                                 is_type_only: false,
                             });
                         }
+                        StatementAction::UnwrapExportDefault
                     }
-                    ExportDefaultDeclarationKind::ClassDeclaration(mut class_decl) => {
-                        class_decl.span.start = export_default.span.start;
-                        let name = if let Some(id) = &class_decl.id {
-                            id.name.to_string()
-                        } else {
-                            class_decl.id = Some(ast.binding_identifier(SPAN, "export_default"));
-                            "export_default".to_string()
-                        };
-                        class_decl.declare = true;
-                        output.push(Statement::ClassDeclaration(class_decl));
+                    ExportDefaultDeclarationKind::ClassDeclaration(class_decl) => {
+                        let name =
+                            class_decl.id.as_ref().map_or("export_default", |id| id.name.as_str());
                         if module.is_entry {
                             acc.exports.push(ExportedName {
-                                local: name,
+                                local: name.to_string(),
                                 exported: "default".to_string(),
                                 is_type_only: false,
                             });
                         }
+                        StatementAction::UnwrapExportDefault
                     }
-                    ExportDefaultDeclarationKind::TSInterfaceDeclaration(mut iface_decl) => {
-                        iface_decl.span.start = export_default.span.start;
-                        let name = iface_decl.id.name.to_string();
-                        output.push(Statement::TSInterfaceDeclaration(iface_decl));
+                    ExportDefaultDeclarationKind::TSInterfaceDeclaration(iface_decl) => {
+                        let name = iface_decl.id.name.as_str();
                         if module.is_entry {
                             acc.exports.push(ExportedName {
-                                local: name,
+                                local: name.to_string(),
                                 exported: "default".to_string(),
                                 is_type_only: false,
                             });
                         }
+                        StatementAction::UnwrapExportDefault
                     }
-                    kind => {
-                        if module.is_entry
-                            && let ExportDefaultDeclarationKind::Identifier(id) = kind
-                        {
+                    ExportDefaultDeclarationKind::Identifier(id) => {
+                        if module.is_entry {
                             acc.exports.push(ExportedName {
                                 local: id.name.to_string(),
                                 exported: "default".to_string(),
                                 is_type_only: false,
                             });
                         }
+                        StatementAction::Skip
                     }
+                    _ => StatementAction::Skip,
                 }
             }
             Statement::ExportAllDeclaration(export_all) => {
@@ -915,10 +904,11 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                         is_type_only: false,
                     });
                 }
+                StatementAction::Skip
             }
             Statement::ImportDeclaration(import_decl) => {
                 if module.resolve_internal_specifier(import_decl.source.value.as_str()).is_some() {
-                    return;
+                    return StatementAction::Skip;
                 }
                 let specifiers: Vec<ImportSpecifier> = import_decl
                     .specifiers
@@ -951,7 +941,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                         .resolved_external_specifiers
                         .contains(import_decl.source.value.as_str())
                 {
-                    return;
+                    return StatementAction::Skip;
                 }
                 acc.imports.push(ExternalImport {
                     source: import_decl.source.value.to_string(),
@@ -960,26 +950,107 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                     is_type_only: false,
                     from_reexport: false,
                 });
+                StatementAction::Skip
             }
-            Statement::TSNamespaceExportDeclaration(_) | Statement::TSExportAssignment(_) => {}
+            Statement::TSNamespaceExportDeclaration(_) | Statement::TSExportAssignment(_) => {
+                StatementAction::Skip
+            }
             Statement::TSImportEqualsDeclaration(decl) => {
                 if let oxc_ast::ast::TSModuleReference::ExternalModuleReference(ext) =
                     &decl.module_reference
                     && module.resolve_internal_specifier(ext.expression.value.as_str()).is_some()
                 {
-                    return;
+                    return StatementAction::Skip;
                 }
-                output.push(Statement::TSImportEqualsDeclaration(decl));
+                StatementAction::Include
             }
             _ => {
                 if let Some(needed) = needed_symbol_kinds
                     && let Some(decl) = stmt.as_declaration()
                     && !declaration_matches_needed_kinds(decl, &module.scoping, needed)
                 {
-                    return;
+                    return StatementAction::Skip;
                 }
-                output.push(stmt);
+                StatementAction::Include
             }
+        }
+    }
+}
+
+/// Prune unused imports after the transform and rewrite passes.
+///
+/// Drops external namespace helpers whose only usages were inside tree-shaken
+/// declarations, and removes named/default import specifiers that are no longer
+/// referenced in the transformed AST.
+fn prune_unused_imports(
+    imports: &mut Vec<ExternalImport>,
+    imports_start: usize,
+    transformed_body: &oxc_allocator::Vec<'_, Statement<'_>>,
+    module_exports: &[ExportedName],
+    reexported_import_names: &FxHashSet<String>,
+    external_ns_info: &FxHashMap<SymbolId, (String, String)>,
+) {
+    let referenced_names = {
+        let mut collector = ReferencedNameCollector::new();
+        for stmt in transformed_body {
+            collector.visit_statement(stmt);
+        }
+        collector.finish()
+    };
+    let module_exported_locals: FxHashSet<String> =
+        module_exports.iter().map(|export| export.local.clone()).collect();
+
+    // Drop TypeScript-generated external namespace helpers whose only
+    // usages were inside tree-shaken declarations. Keep user-authored
+    // namespace imports (for example `import * as http`) to preserve the
+    // plugin's current snapshot semantics.
+    if !external_ns_info.is_empty() {
+        for (specifier, local_name) in external_ns_info.values() {
+            if referenced_names.contains(local_name)
+                || module_exported_locals.contains(local_name.as_str())
+                || !is_generated_external_namespace_helper(local_name)
+            {
+                continue;
+            }
+
+            if let Some(idx) = imports.iter().position(|i| {
+                i.source == *specifier
+                    && i.specifiers.iter().any(|s| {
+                        matches!(s.kind, ImportSpecifierKind::Namespace) && s.local == *local_name
+                    })
+            }) {
+                imports[idx].specifiers.retain(|s| {
+                    !(matches!(s.kind, ImportSpecifierKind::Namespace) && s.local == *local_name)
+                });
+                if imports[idx].specifiers.is_empty() {
+                    imports.remove(idx);
+                }
+            }
+        }
+    }
+
+    // Drop external named/default imports that no longer have any
+    // remaining references after tree-shaking. Imports created from
+    // `export { ... } from "ext"` re-exports are exempt.
+    for import in &mut imports[imports_start..] {
+        if import.from_reexport {
+            continue;
+        }
+        import.specifiers.retain(|specifier| match specifier.kind {
+            ImportSpecifierKind::Namespace => true,
+            ImportSpecifierKind::Default | ImportSpecifierKind::Named(_) => {
+                referenced_names.contains(specifier.local.as_str())
+                    || module_exported_locals.contains(specifier.local.as_str())
+                    || reexported_import_names.contains(specifier.local.as_str())
+            }
+        });
+    }
+    let mut import_idx = imports_start;
+    while import_idx < imports.len() {
+        if imports[import_idx].side_effect_only || !imports[import_idx].specifiers.is_empty() {
+            import_idx += 1;
+        } else {
+            imports.remove(import_idx);
         }
     }
 }

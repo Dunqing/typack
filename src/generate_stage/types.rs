@@ -5,7 +5,7 @@ use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::link_stage::{NeededKindFlags, RenamePlan};
-use crate::types::{Module, ModuleIdx};
+use crate::types::ModuleIdx;
 
 /// An exported name with optional rename info.
 pub(super) struct ExportedName {
@@ -93,8 +93,32 @@ pub(super) struct GenerateAcc {
     pub(super) warnings: Vec<OxcDiagnostic>,
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct ModuleTransformCtx<'m, 'a> {
-    pub(super) module: &'m Module<'a>,
-    pub(super) needed_symbol_kinds: Option<&'m FxHashMap<SymbolId, NeededKindFlags>>,
+/// What to do with each statement during the transform phase.
+pub(super) enum StatementAction {
+    /// Skip this statement entirely (tree-shaken, consumed as metadata, or internal import).
+    Skip,
+    /// Clone this statement as-is and include in output.
+    Include,
+    /// Clone the inner declaration from an `export named`, add `declare`, adjust span.
+    UnwrapExportDeclaration,
+    /// Clone the inner declaration from an `export default`, convert to named declaration.
+    UnwrapExportDefault,
+}
+
+/// Result of the read-only analysis phase for one module.
+///
+/// Contains per-module data needed by the transform phase. Exports, imports,
+/// and star exports are written directly into `GenerateAcc` during analysis
+/// to avoid intermediate allocations.
+pub(super) struct ModuleAnalysis {
+    /// Per-statement actions (indexed by position in original body).
+    pub(super) statement_actions: Vec<StatementAction>,
+    /// Import renames: local symbol → resolved name from source module.
+    pub(super) import_renames: FxHashMap<SymbolId, String>,
+    /// Internal namespace alias symbols.
+    pub(super) ns_aliases: FxHashSet<SymbolId>,
+    /// External namespace info: symbol → (source, local_name).
+    pub(super) external_ns_info: FxHashMap<SymbolId, (String, String)>,
+    /// Names from re-exported imports that must survive pruning.
+    pub(super) reexported_import_names: FxHashSet<String>,
 }
