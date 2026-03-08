@@ -90,26 +90,26 @@ impl TypackBundler {
             }
         }
 
-        // Phase 1: Process all modules into fragments (consumes AST bodies).
+        // Phase 1: Process all modules (transforms, no codegen).
         let module_fragments = process_all_module_fragments(
             &mut scan_result,
             &allocator,
             &link_output,
             &merged_helper_reserved_names,
             &needed_modules,
-            options.sourcemap,
-            &options.cwd,
         );
 
-        // Phase 2: Assemble per-entry output from fragments.
+        // Phase 2: Per-entry tree-shake + codegen + assembly.
         for (i, &entry_idx) in entry_indices.iter().enumerate() {
             let generated = assemble_entry(
                 entry_idx,
                 &module_fragments,
                 &precomputed[i],
                 &scan_result,
+                &allocator,
                 options.sourcemap,
                 options.cjs_default,
+                &options.cwd,
             );
             all_warnings.extend(generated.warnings);
             all_outputs.push(BundleOutput { code: generated.code, map: generated.map });

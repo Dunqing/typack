@@ -279,11 +279,9 @@ pub fn process_all_module_fragments<'a>(
     link_output: &LinkStageOutput,
     helper_reserved_names: &FxHashSet<String>,
     needed_modules: &FxHashSet<ModuleIdx>,
-    sourcemap: bool,
-    cwd: &Path,
-) -> Vec<Option<ModuleFragments>> {
+) -> Vec<Option<ModuleFragments<'a>>> {
     let num_modules = scan_result.modules.len();
-    let mut all_fragments: Vec<Option<ModuleFragments>> = Vec::with_capacity(num_modules);
+    let mut all_fragments: Vec<Option<ModuleFragments<'a>>> = Vec::with_capacity(num_modules);
     for module_idx_usize in 0..num_modules {
         let module_idx = ModuleIdx::from_usize(module_idx_usize);
         if !needed_modules.contains(&module_idx) {
@@ -296,8 +294,6 @@ pub fn process_all_module_fragments<'a>(
             allocator,
             link_output,
             helper_reserved_names,
-            sourcemap,
-            cwd,
         );
         all_fragments.push(fragments);
     }
@@ -311,9 +307,7 @@ fn process_single_module_fragments<'a>(
     allocator: &'a Allocator,
     link_output: &LinkStageOutput,
     helper_reserved_names: &FxHashSet<String>,
-    sourcemap: bool,
-    cwd: &Path,
-) -> Option<ModuleFragments> {
+) -> Option<ModuleFragments<'a>> {
     let rename_plan = &link_output.rename_plan;
     let default_export_names = &link_output.default_export_names;
     let ast = AstBuilder::new(allocator);
@@ -605,20 +599,10 @@ fn process_single_module_fragments<'a>(
         }
     }
 
-    // ── Step 7: Per-statement codegen → fragments ────────────────────────
+    // ── Step 7: Collect referenced names + build fragments (no codegen) ──
     let relative_path = scan_result.modules[module_idx].relative_path.clone();
-    let input_sourcemap = &scan_result.modules[module_idx].input_sourcemap;
 
-    let mut codegen_options = CodegenOptions {
-        indent_char: IndentChar::Space,
-        indent_width: 2,
-        ..CodegenOptions::default()
-    };
-    if sourcemap {
-        codegen_options.source_map_path = Some(PathBuf::from(&relative_path));
-    }
-
-    // ── Step 7a: Collect referenced names per-statement BEFORE codegen ───
+    // Collect referenced names per-statement from the transformed body.
     let mut per_stmt_referenced_names: Vec<FxHashSet<String>> =
         Vec::with_capacity(transformed_body.len());
     for stmt in &transformed_body {
@@ -627,79 +611,25 @@ fn process_single_module_fragments<'a>(
         per_stmt_referenced_names.push(collector.finish());
     }
 
-    // Convert transformed_body to Option<Statement> for indexed take
-    let mut body_stmts: Vec<Option<Statement<'a>>> =
-        transformed_body.into_iter().map(Some).collect();
+    // Build fragments in source order. body_index points into transformed_body
+    // (which is kept as-is, no reordering).
+    let mut fragments: Vec<DeclarationFragment> = Vec::with_capacity(ordered_metas.len());
 
-    let mut fragments: Vec<DeclarationFragment> =
-        Vec::with_capacity(body_stmts.len() + ordered_metas.len());
-
-    // Build fragments in source order (body and metaonly interleaved)
     for (meta, body_index) in ordered_metas {
-        if let Some(idx) = body_index {
-            let stmt = body_stmts[idx].take().unwrap();
-            let referenced_names = std::mem::take(&mut per_stmt_referenced_names[idx]);
-
-            // Build mini-program for codegen
-            let mini_body = ast.vec_from_iter(std::iter::once(stmt));
-            let mini_comments = comments.clone_in(allocator);
-            let mini_program = ast.program(
-                program_span,
-                source_type,
-                source_text,
-                mini_comments,
-                None,
-                ast.vec(),
-                mini_body,
-            );
-
-            let codegen_return =
-                Codegen::new().with_options(codegen_options.clone()).build(&mini_program);
-            let code = codegen_return.code;
-            let map = if sourcemap {
-                match (codegen_return.map, input_sourcemap) {
-                    (Some(codegen_map), Some(input_map)) => {
-                        let module_path = &scan_result.modules[module_idx].path;
-                        Some(sourcemap::compose_sourcemaps(
-                            &codegen_map,
-                            input_map,
-                            module_path,
-                            cwd,
-                        ))
-                    }
-                    (map, _) => map,
-                }
-            } else {
-                None
-            };
-
-            fragments.push(DeclarationFragment {
-                code,
-                map,
-                defined_symbols: meta.defined_symbols,
-                export_names: meta.export_names,
-                imports: meta.imports,
-                referenced_names,
-                is_export_statement: meta.is_export_statement,
-                star_exports: meta.star_exports,
-                bare_reexport_specs: meta.bare_reexport_specs,
-                internal_ns_reexports: meta.internal_ns_reexports,
-            });
-        } else {
-            // Metadata-only fragment (no code output)
-            fragments.push(DeclarationFragment {
-                code: String::new(),
-                map: None,
-                defined_symbols: meta.defined_symbols,
-                export_names: meta.export_names,
-                imports: meta.imports,
-                referenced_names: FxHashSet::default(),
-                is_export_statement: meta.is_export_statement,
-                star_exports: meta.star_exports,
-                bare_reexport_specs: meta.bare_reexport_specs,
-                internal_ns_reexports: meta.internal_ns_reexports,
-            });
-        }
+        let referenced_names = body_index
+            .map(|idx| std::mem::take(&mut per_stmt_referenced_names[idx]))
+            .unwrap_or_default();
+        fragments.push(DeclarationFragment {
+            defined_symbols: meta.defined_symbols,
+            export_names: meta.export_names,
+            imports: meta.imports,
+            referenced_names,
+            is_export_statement: meta.is_export_statement,
+            star_exports: meta.star_exports,
+            bare_reexport_specs: meta.bare_reexport_specs,
+            internal_ns_reexports: meta.internal_ns_reexports,
+            body_index,
+        });
     }
 
     Some(ModuleFragments {
@@ -710,6 +640,11 @@ fn process_single_module_fragments<'a>(
         reexported_import_names,
         external_ns_info,
         warnings,
+        body: transformed_body,
+        comments,
+        program_span,
+        source_type,
+        source_text,
     })
 }
 
@@ -1086,13 +1021,18 @@ fn process_statement_for_fragment<'a>(
 }
 
 /// Phase 2: Assemble per-entry output from pre-computed fragments.
-pub fn assemble_entry(
+///
+/// For each module, filters statements by tree-shaking, codegens the survivors
+/// as a single block, then assembles the final output.
+pub fn assemble_entry<'a>(
     entry_idx: ModuleIdx,
-    module_fragments: &[Option<ModuleFragments>],
+    module_fragments: &[Option<ModuleFragments<'a>>],
     precomputed: &PrecomputedEntryData,
     scan_result: &ScanResult<'_>,
+    allocator: &'a Allocator,
     sourcemap: bool,
     cjs_default: bool,
+    cwd: &Path,
 ) -> GenerateOutput {
     let mut output = OutputAssembler::default();
     let mut exports: Vec<ExportedName> = Vec::new();
@@ -1142,18 +1082,17 @@ pub fn assemble_entry(
             continue;
         };
 
-        // Select fragments based on tree-shaking
-        let mut selected_code = String::new();
-        let mut selected_maps: Vec<(oxc_sourcemap::SourceMap, u32)> = Vec::new();
-        let mut current_line_offset: u32 = 0;
+        let ast = AstBuilder::new(allocator);
+
+        // ── Tree-shake: filter fragments, collect included body indices ──
+        let mut included_body_indices: Vec<usize> = Vec::new();
         let mut module_referenced_names: FxHashSet<&str> = FxHashSet::default();
         let mut module_exported_locals: FxHashSet<String> = FxHashSet::default();
 
         for fragment in &module_frags.fragments {
-            // Check if this fragment passes tree-shaking
             let should_include = if let Some(needed) = module_needed {
                 if fragment.defined_symbols.is_empty() {
-                    true // no defined symbols = always include (e.g., imports, type-only stmts)
+                    true
                 } else {
                     fragment.defined_symbols.iter().any(|(symbol_id, decl_kinds)| {
                         needed
@@ -1162,20 +1101,15 @@ pub fn assemble_entry(
                     })
                 }
             } else {
-                true // no tree-shaking filter
+                true
             };
 
             if !should_include {
                 continue;
             }
 
-            if !fragment.code.is_empty() {
-                if let Some(map) = &fragment.map {
-                    selected_maps.push((map.clone(), current_line_offset));
-                }
-                current_line_offset +=
-                    u32::try_from(fragment.code.match_indices('\n').count()).unwrap();
-                selected_code.push_str(&fragment.code);
+            if let Some(body_idx) = fragment.body_index {
+                included_body_indices.push(body_idx);
             }
             module_referenced_names.extend(fragment.referenced_names.iter().map(String::as_str));
 
@@ -1190,7 +1124,6 @@ pub fn assemble_entry(
                     exports.push(e.clone());
                 }
 
-                // Resolve bare re-export specifiers with namespace info
                 for spec in &fragment.bare_reexport_specs {
                     let local = if let Some(symbol_id) = spec.symbol_id
                         && let Some(source_module_idx) =
@@ -1209,11 +1142,8 @@ pub fn assemble_entry(
                     });
                 }
 
-                // Resolve internal namespace re-exports
                 for ns_reexport in &fragment.internal_ns_reexports {
                     if ns_reexport.exported_name.is_empty() {
-                        // Plain star re-export: `export * from "./internal"`
-                        // Use pre-computed data
                         if let Some(star_data) =
                             precomputed.star_reexport_data.get(&ns_reexport.source_module_idx)
                         {
@@ -1223,7 +1153,6 @@ pub fn assemble_entry(
                     } else if let Some(wrap) =
                         precomputed.namespace_wraps.get(&ns_reexport.source_module_idx)
                     {
-                        // Named namespace re-export: `export * as X from "./internal"`
                         exports.push(ExportedName {
                             local: wrap.namespace_name.clone(),
                             exported: ns_reexport.exported_name.clone(),
@@ -1233,10 +1162,7 @@ pub fn assemble_entry(
                 }
             }
 
-            // Collect imports from this fragment
             imports.extend(fragment.imports.iter().cloned());
-
-            // Collect star exports from this fragment
             star_exports.extend(fragment.star_exports.iter().cloned());
         }
 
@@ -1305,9 +1231,54 @@ pub fn assemble_entry(
             all_ns_wrapper_blocks.push_str(&module_frags.ns_wrapper_blocks);
         }
 
-        if selected_code.is_empty() && ns_wrap.is_none() {
+        if included_body_indices.is_empty() && ns_wrap.is_none() {
             continue;
         }
+
+        // ── Codegen: build body for codegen ──
+        // Fast path: if all body statements are included, clone the whole body at once.
+        let all_included = included_body_indices.len() == module_frags.body.len();
+        let filtered_body = if all_included {
+            module_frags.body.clone_in(allocator)
+        } else {
+            ast.vec_from_iter(
+                included_body_indices.iter().map(|&idx| module_frags.body[idx].clone_in(allocator)),
+            )
+        };
+
+        let mut codegen_options = CodegenOptions {
+            indent_char: IndentChar::Space,
+            indent_width: 2,
+            ..CodegenOptions::default()
+        };
+        if sourcemap {
+            codegen_options.source_map_path = Some(PathBuf::from(&module_frags.relative_path));
+        }
+
+        let program = ast.program(
+            module_frags.program_span,
+            module_frags.source_type,
+            module_frags.source_text,
+            module_frags.comments.clone_in(allocator),
+            None,
+            ast.vec(),
+            filtered_body,
+        );
+
+        let codegen_return = Codegen::new().with_options(codegen_options).build(&program);
+        let code = codegen_return.code;
+        let map = if sourcemap {
+            let input_sourcemap = &scan_result.modules[module_idx].input_sourcemap;
+            match (codegen_return.map, input_sourcemap) {
+                (Some(codegen_map), Some(input_map)) => {
+                    let module_path = &scan_result.modules[module_idx].path;
+                    Some(sourcemap::compose_sourcemaps(&codegen_map, input_map, module_path, cwd))
+                }
+                (map, _) => map,
+            }
+        } else {
+            None
+        };
 
         let namespace_wrapper = ns_wrap.map(|wrap| {
             let mut out = String::new();
@@ -1326,23 +1297,12 @@ pub fn assemble_entry(
             out
         });
 
-        // Combine maps for this module
-        let combined_map = if sourcemap && !selected_maps.is_empty() {
-            let mut builder = oxc_sourcemap::ConcatSourceMapBuilder::default();
-            for (map, line_offset) in &selected_maps {
-                builder.add_sourcemap(map, *line_offset);
-            }
-            Some(builder.into_sourcemap())
-        } else {
-            None
-        };
-
         module_outputs.push_front(ModuleOutput {
             relative_path: module_frags.relative_path.clone(),
             is_ns_wrapped: ns_wrap.is_some(),
             namespace_wrapper,
-            code: selected_code,
-            map: combined_map,
+            code,
+            map,
         });
     }
 
