@@ -17,7 +17,9 @@ use crate::scan_stage::ScanResult;
 use crate::types::ModuleIdx;
 
 pub use exports::{collect_all_exported_names, resolve_default_export_name};
-pub use needed_names::{build_needed_names, compute_entry_needed_symbols};
+#[cfg(test)]
+pub use needed_names::build_needed_names;
+pub use needed_names::{NeededNamesCtx, build_needed_names_with_ctx, compute_entry_needed_symbols};
 pub use rename::build_rename_plan;
 pub use resolved_exports::build_resolved_exports;
 pub use types::NeededKindFlags;
@@ -88,8 +90,10 @@ pub fn build_link_stage_output(
 pub fn build_per_entry_link_data(
     scan_result: &ScanResult<'_>,
     entry_idx: ModuleIdx,
+    ctx: &NeededNamesCtx,
 ) -> PerEntryLinkData {
-    let mut needed_names_plan = build_needed_names(&scan_result.modules[entry_idx], scan_result);
+    let mut needed_names_plan =
+        build_needed_names_with_ctx(&scan_result.modules[entry_idx], scan_result, ctx);
 
     // Compute only the symbols the entry actually needs (exports + augmentation
     // refs + semantic deps) instead of keeping everything.

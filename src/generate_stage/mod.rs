@@ -34,7 +34,9 @@ use crate::helpers::collect_decl_names;
 use crate::link_stage::exports::{
     find_external_reexport_source, resolve_export_local_name, resolve_export_origin,
 };
-use crate::link_stage::{LinkStageOutput, NeededKindFlags, RenamePlan, build_per_entry_link_data};
+use crate::link_stage::{
+    LinkStageOutput, NeededKindFlags, NeededNamesCtx, RenamePlan, build_per_entry_link_data,
+};
 use crate::scan_stage::ScanResult;
 use crate::types::{Module, ModuleIdx};
 use namespace::{
@@ -48,7 +50,6 @@ use types::*;
 /// Generate stage: produces the bundled `.d.ts` output.
 pub struct GenerateStage<'a, 'b> {
     scan_result: &'b ScanResult<'a>,
-    entry_idx: ModuleIdx,
     allocator: &'a Allocator,
     sourcemap: bool,
     cjs_default: bool,
@@ -66,24 +67,18 @@ pub struct GenerateOutput {
 impl<'a, 'b> GenerateStage<'a, 'b> {
     pub fn new(
         scan_result: &'b ScanResult<'a>,
-        entry_idx: ModuleIdx,
         allocator: &'a Allocator,
         sourcemap: bool,
         cjs_default: bool,
         cwd: &'b Path,
         link_output: &'b LinkStageOutput,
     ) -> Self {
-        Self { scan_result, entry_idx, allocator, sourcemap, cjs_default, cwd, link_output }
+        Self { scan_result, allocator, sourcemap, cjs_default, cwd, link_output }
     }
 
-    /// Generate the bundled `.d.ts` output.
-    pub fn generate(&self) -> GenerateOutput {
-        let mut output = OutputAssembler::default();
-        let mut acc = GenerateAcc::default();
-        let rename_plan = &self.link_output.rename_plan;
-        let per_entry = build_per_entry_link_data(self.scan_result, self.entry_idx);
-
-        // Collect and deduplicate reference directives from all modules
+    /// Generate the bundled `.d.ts` output for all entries.
+    pub fn generate_all(&self) -> Vec<GenerateOutput> {
+        // Collect and deduplicate reference directives from all modules (shared across entries)
         let mut seen_set: FxHashSet<&str> = FxHashSet::default();
         let mut unique_directives: Vec<&str> = Vec::new();
         for module in &self.scan_result.modules {
@@ -93,14 +88,37 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                 }
             }
         }
-        for directive in &unique_directives {
+
+        // Precompute declaration graphs and root names once for all entries
+        let needed_names_ctx = NeededNamesCtx::new(self.scan_result);
+
+        self.scan_result
+            .entry_indices
+            .iter()
+            .map(|&entry_idx| self.generate_entry(entry_idx, &unique_directives, &needed_names_ctx))
+            .collect()
+    }
+
+    /// Generate the bundled `.d.ts` output for a single entry.
+    fn generate_entry(
+        &self,
+        entry_idx: ModuleIdx,
+        unique_directives: &[&str],
+        needed_names_ctx: &NeededNamesCtx,
+    ) -> GenerateOutput {
+        let mut output = OutputAssembler::default();
+        let mut acc = GenerateAcc::default();
+        let rename_plan = &self.link_output.rename_plan;
+        let per_entry = build_per_entry_link_data(self.scan_result, entry_idx, needed_names_ctx);
+
+        for directive in unique_directives {
             output.push_unmapped(format!("{directive}\n"));
         }
 
         // Pre-scan all modules for namespace import patterns
         let (mut namespace_wraps, namespace_aliases) = pre_scan_namespace_info(
             self.scan_result,
-            self.entry_idx,
+            entry_idx,
             &self.link_output.all_module_aliases,
         );
 

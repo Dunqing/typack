@@ -63,25 +63,20 @@ impl TypackBundler {
         let allocator = Allocator::default();
         let mut scan_result = ScanStage::new(options, &allocator).scan()?;
         let mut all_warnings = std::mem::take(&mut scan_result.warnings);
-        let mut all_outputs = Vec::with_capacity(options.input.len());
-        let entry_indices = scan_result.entry_indices.clone();
         let rename_plan = build_rename_plan(&scan_result);
         let link_output = build_link_stage_output(&scan_result, rename_plan);
         all_warnings.extend(link_output.warnings.iter().cloned());
 
-        for &entry_idx in &entry_indices {
-            let generated = {
-                let stage = GenerateStage::new(
-                    &scan_result,
-                    entry_idx,
-                    &allocator,
-                    options.sourcemap,
-                    options.cjs_default,
-                    &options.cwd,
-                    &link_output,
-                );
-                stage.generate()
-            };
+        let stage = GenerateStage::new(
+            &scan_result,
+            &allocator,
+            options.sourcemap,
+            options.cjs_default,
+            &options.cwd,
+            &link_output,
+        );
+        let mut all_outputs = Vec::with_capacity(options.input.len());
+        for generated in stage.generate_all() {
             all_warnings.extend(generated.warnings);
             all_outputs.push(BundleOutput { code: generated.code, map: generated.map });
         }
