@@ -100,11 +100,12 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
 
         while let Some(idx) = queue.pop_front() {
             // Every module in the BFS queue was added via add_module, which populates module_hints.
+            // Take specifier lists to avoid cloning (each module is visited once).
             let hints = module_hints
-                .get(&idx)
+                .get_mut(&idx)
                 .expect("module_hints populated for every module in BFS queue");
-            let eager_specifiers = hints.eager.clone();
-            let side_effect_specifiers = hints.side_effect.clone();
+            let eager_specifiers = std::mem::take(&mut hints.eager);
+            let side_effect_specifiers = std::mem::take(&mut hints.side_effect);
             let importer_path = modules[idx].path.clone();
 
             for specifier in &eager_specifiers {
