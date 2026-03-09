@@ -20,7 +20,7 @@ use oxc_allocator::Allocator;
 use oxc_diagnostics::OxcDiagnostic;
 
 use crate::generate_stage::GenerateStage;
-use crate::link_stage::{LinkStage, LinkStageOutput};
+use crate::link_stage::{LinkStage, LinkStageOutput, NeededNamesCtx};
 use crate::scan_stage::{ScanStage, ScanStageOutput};
 
 /// A single bundled output for one entry point.
@@ -71,17 +71,27 @@ impl<'a> Bundle<'a> {
     }
 
     /// Run the generate stage, producing one output per entry point.
-    pub fn generate(&self, options: &TypackOptions) -> BundleResult {
+    ///
+    /// Takes `&mut self` because the single-entry fast path takes ownership of
+    /// AST statements (via `TakeIn`) to avoid cloning. This means `generate`
+    /// can only be called once.
+    pub fn generate(&mut self, options: &TypackOptions) -> BundleResult {
         let mut all_warnings: Vec<OxcDiagnostic> = self.scan_output.warnings.clone();
         all_warnings.extend(self.link_output.warnings.iter().cloned());
 
-        let stage = GenerateStage::new(
-            &self.scan_output,
+        // Pre-compute data that needs to read ast_table before we hand out &mut access.
+        let unique_directives = collect_unique_directives(&self.scan_output);
+        let needed_names_ctx = NeededNamesCtx::new(&self.scan_output);
+
+        let mut stage = GenerateStage::new(
+            &mut self.scan_output,
             self.allocator,
             options.sourcemap,
             options.cjs_default,
             &options.cwd,
             &self.link_output,
+            unique_directives,
+            needed_names_ctx,
         );
         let mut all_outputs = Vec::with_capacity(options.input.len());
         for generated in stage.generate_all() {
@@ -91,6 +101,19 @@ impl<'a> Bundle<'a> {
 
         BundleResult { output: all_outputs, warnings: all_warnings }
     }
+}
+
+fn collect_unique_directives(scan_output: &ScanStageOutput) -> Vec<String> {
+    let mut seen_set: rustc_hash::FxHashSet<&str> = rustc_hash::FxHashSet::default();
+    let mut unique_directives = Vec::new();
+    for module in &scan_output.module_table {
+        for directive in &module.reference_directives {
+            if seen_set.insert(directive.as_str()) {
+                unique_directives.push(directive.clone());
+            }
+        }
+    }
+    unique_directives
 }
 
 /// Convenience wrapper for the bundling pipeline.
@@ -109,7 +132,7 @@ impl TypackBundler {
     /// such as parse failures or unresolvable import specifiers.
     pub fn bundle(options: &TypackOptions) -> Result<BundleResult, Vec<OxcDiagnostic>> {
         let allocator = Allocator::default();
-        let bundle = Bundle::new(options, &allocator)?;
+        let mut bundle = Bundle::new(options, &allocator)?;
         Ok(bundle.generate(options))
     }
 }

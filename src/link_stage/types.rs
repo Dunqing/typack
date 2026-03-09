@@ -32,6 +32,10 @@ pub struct ModuleLinkMeta {
     pub external_ns_info: FxHashMap<SymbolId, (String, String)>,
     /// Names from re-exported imports that must survive pruning.
     pub reexported_import_names: FxHashSet<String>,
+    /// Whether the module needs structural AST mutations beyond simple renames.
+    /// True when the module has namespace aliases to strip or inline import
+    /// types (`import("...")`) referencing internal modules that need rewriting.
+    pub needs_structural_mutation: bool,
 }
 
 /// An exported name with optional rename info.

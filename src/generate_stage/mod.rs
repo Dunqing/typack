@@ -30,12 +30,16 @@ use types::*;
 
 /// Generate stage: produces the bundled `.d.ts` output.
 pub struct GenerateStage<'a, 'b> {
-    scan_result: &'b ScanStageOutput<'a>,
+    scan_result: &'b mut ScanStageOutput<'a>,
     allocator: &'a Allocator,
     sourcemap: bool,
     cjs_default: bool,
     cwd: &'b Path,
     link_output: &'b LinkStageOutput,
+    /// Pre-computed unique reference directives (shared across entries).
+    unique_directives: Vec<String>,
+    /// Pre-computed declaration graphs and root names.
+    needed_names_ctx: NeededNamesCtx,
 }
 
 /// Output from generate stage.
@@ -47,56 +51,93 @@ pub struct GenerateOutput {
 
 impl<'a, 'b> GenerateStage<'a, 'b> {
     pub fn new(
-        scan_result: &'b ScanStageOutput<'a>,
+        scan_result: &'b mut ScanStageOutput<'a>,
         allocator: &'a Allocator,
         sourcemap: bool,
         cjs_default: bool,
         cwd: &'b Path,
         link_output: &'b LinkStageOutput,
+        unique_directives: Vec<String>,
+        needed_names_ctx: NeededNamesCtx,
     ) -> Self {
-        Self { scan_result, allocator, sourcemap, cjs_default, cwd, link_output }
+        Self {
+            scan_result,
+            allocator,
+            sourcemap,
+            cjs_default,
+            cwd,
+            link_output,
+            unique_directives,
+            needed_names_ctx,
+        }
     }
 
     /// Generate the bundled `.d.ts` output for all entries.
-    pub fn generate_all(&self) -> Vec<GenerateOutput> {
-        // Collect and deduplicate reference directives from all modules (shared across entries)
-        let mut seen_set: rustc_hash::FxHashSet<&str> = rustc_hash::FxHashSet::default();
-        let mut unique_directives: Vec<&str> = Vec::new();
-        for module in &self.scan_result.module_table {
-            for directive in &module.reference_directives {
-                if seen_set.insert(directive.as_str()) {
-                    unique_directives.push(directive.as_str());
-                }
-            }
-        }
+    pub fn generate_all(&mut self) -> Vec<GenerateOutput> {
+        let single_entry = self.scan_result.entry_points.len() == 1;
 
-        // Precompute declaration graphs and root names once for all entries
-        let needed_names_ctx = NeededNamesCtx::new(self.scan_result);
+        // For multi-entry: pre-apply global renames to all module ASTs so that
+        // rename-only modules (no structural mutations) can skip cloning entirely.
+        if !single_entry {
+            self.pre_apply_global_renames();
+        }
 
         self.scan_result
             .entry_points
+            .clone()
             .iter()
-            .map(|&entry_idx| self.generate_entry(entry_idx, &unique_directives, &needed_names_ctx))
+            .map(|&entry_idx| self.generate_entry(entry_idx, single_entry))
             .collect()
     }
 
+    /// Pre-apply canonical name renames and import renames permanently to all
+    /// module ASTs. Since renames are global (identical across entries), this is
+    /// safe to do once before the entry loop.
+    fn pre_apply_global_renames(&mut self) {
+        use crate::generate_stage::finalizer::RenameApplier;
+        use oxc_ast_visit::VisitMut;
+
+        for module_idx_usize in 0..self.scan_result.module_table.len() {
+            let module_idx = ModuleIdx::from_usize(module_idx_usize);
+            let module = &self.scan_result.module_table[module_idx];
+
+            // Compute merged renames for this module (same computation as in render_module).
+            let import_renames = compute_import_renames(
+                self.scan_result,
+                module_idx,
+                &self.link_output.canonical_names,
+                &self.link_output.default_export_names,
+            );
+            let merged_renames = render_module::build_merged_renames(
+                &self.link_output.canonical_names,
+                module_idx,
+                &import_renames,
+            );
+            if merged_renames.is_empty() {
+                continue;
+            }
+
+            let mut applier = RenameApplier {
+                allocator: self.allocator,
+                scoping: &module.scoping,
+                renamed_symbols: &merged_renames,
+            };
+            applier.visit_statements(&mut self.scan_result.ast_table[module_idx].body);
+        }
+    }
+
     /// Generate the bundled `.d.ts` output for a single entry.
-    fn generate_entry(
-        &self,
-        entry_idx: ModuleIdx,
-        unique_directives: &[&str],
-        needed_names_ctx: &NeededNamesCtx,
-    ) -> GenerateOutput {
+    fn generate_entry(&mut self, entry_idx: ModuleIdx, single_entry: bool) -> GenerateOutput {
         let mut joiner = SourceJoiner::default();
         let mut acc = GenerateAcc::default();
         let per_entry = build_per_entry_link_data(
             self.scan_result,
             entry_idx,
-            needed_names_ctx,
+            &self.needed_names_ctx,
             self.link_output,
         );
 
-        for directive in unique_directives {
+        for directive in &self.unique_directives {
             joiner.append_raw(format!("{directive}\n"));
         }
 
@@ -155,6 +196,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                 self.sourcemap,
                 self.cwd,
                 &mut acc,
+                single_entry,
             ) {
                 module_outputs.push_front(rendered);
             }
@@ -241,4 +283,67 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         }
         None
     }
+}
+
+/// Compute import renames for a module without computing the full link meta.
+/// This extracts just the import rename logic from `compute_module_link_meta`,
+/// used during pre-rename application in multi-entry mode.
+fn compute_import_renames(
+    scan_result: &ScanStageOutput,
+    module_idx: ModuleIdx,
+    canonical_names: &crate::link_stage::CanonicalNames,
+    default_export_names: &rustc_hash::FxHashMap<ModuleIdx, String>,
+) -> rustc_hash::FxHashMap<oxc_syntax::symbol::SymbolId, String> {
+    use crate::link_stage::exports::resolve_export_local_name;
+    use oxc_ast::ast::Statement;
+
+    let module = &scan_result.module_table[module_idx];
+    let program_body = &scan_result.ast_table[module_idx].body;
+    let mut import_renames = rustc_hash::FxHashMap::default();
+
+    for stmt in program_body {
+        if let Statement::ImportDeclaration(import_decl) = stmt
+            && let Some(specifiers) = &import_decl.specifiers
+            && let Some(source_idx) =
+                module.resolve_internal_specifier(import_decl.source.value.as_str())
+        {
+            let source_module = &scan_result.module_table[source_idx];
+            for spec in specifiers {
+                match spec {
+                    oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                        let imported_alias = s.imported.name().to_string();
+                        let local_name = resolve_export_local_name(source_module, &imported_alias)
+                            .unwrap_or(imported_alias);
+                        let resolved_imported = canonical_names
+                            .resolve_name(source_module, &local_name)
+                            .map_or(local_name, ToString::to_string);
+                        if s.local.name.as_str() != resolved_imported
+                            && let Some(symbol_id) = s.local.symbol_id.get()
+                        {
+                            import_renames.insert(symbol_id, resolved_imported);
+                        }
+                    }
+                    oxc_ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => {
+                        if let Some(mut actual_name) =
+                            default_export_names.get(&source_module.idx).cloned()
+                        {
+                            if let Some(renamed) =
+                                canonical_names.resolve_name(source_module, &actual_name)
+                            {
+                                actual_name = renamed.to_string();
+                            }
+                            if def.local.name.as_str() != actual_name
+                                && let Some(symbol_id) = def.local.symbol_id.get()
+                            {
+                                import_renames.insert(symbol_id, actual_name);
+                            }
+                        }
+                    }
+                    oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {}
+                }
+            }
+        }
+    }
+
+    import_renames
 }

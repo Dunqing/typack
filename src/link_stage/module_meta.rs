@@ -5,6 +5,7 @@
 //! analysis out of generate and into link, aligning with Rolldown's architecture.
 
 use oxc_ast::ast::{ExportDefaultDeclaration, ExportDefaultDeclarationKind, Statement};
+use oxc_ast_visit::Visit;
 use oxc_semantic::Scoping;
 use oxc_span::Ident;
 use oxc_syntax::symbol::SymbolId;
@@ -38,6 +39,7 @@ pub fn compute_module_link_meta(
         ns_aliases: FxHashSet::default(),
         external_ns_info: FxHashMap::default(),
         reexported_import_names: FxHashSet::default(),
+        needs_structural_mutation: false,
     };
 
     // Pre-scan: collect import renames, ns aliases, external ns info,
@@ -125,6 +127,10 @@ pub fn compute_module_link_meta(
         let action = analyze_statement(stmt, module, needed_symbol_kinds);
         meta.statement_actions.push(action);
     }
+
+    // Detect whether this module needs structural AST mutations beyond renames.
+    meta.needs_structural_mutation = !meta.ns_aliases.is_empty()
+        || has_internal_inline_imports(program_body, &meta.statement_actions, module);
 
     meta
 }
@@ -288,4 +294,42 @@ fn export_default_declaration_matches_needed_kinds(
     let decl_kinds = decl_kinds
         .intersection(NeededKindFlags::from_symbol_flags(scoping.symbol_flags(symbol_id)));
     decl_kinds.is_empty() || needed.get(&symbol_id).is_some_and(|k| k.intersects(decl_kinds))
+}
+
+/// Check whether any included statement contains `TSImportType` nodes that
+/// reference internal modules (requiring inline import rewriting).
+fn has_internal_inline_imports(
+    program_body: &oxc_allocator::Vec<'_, Statement<'_>>,
+    actions: &[StatementAction],
+    module: &crate::types::Module<'_>,
+) -> bool {
+    let mut detector = InlineImportDetector { module, found: false };
+    for (i, stmt) in program_body.iter().enumerate() {
+        if matches!(actions[i], StatementAction::Skip) {
+            continue;
+        }
+        detector.visit_statement(stmt);
+        if detector.found {
+            return true;
+        }
+    }
+    false
+}
+
+struct InlineImportDetector<'a, 'm> {
+    module: &'m crate::types::Module<'a>,
+    found: bool,
+}
+
+impl<'a> Visit<'a> for InlineImportDetector<'a, '_> {
+    fn visit_ts_import_type(&mut self, it: &oxc_ast::ast::TSImportType<'a>) {
+        let specifier = it.source.value.as_str();
+        if self.module.resolve_internal_specifier(specifier).is_some() || specifier.starts_with('.')
+        {
+            self.found = true;
+        }
+        if !self.found {
+            oxc_ast_visit::walk::walk_ts_import_type(self, it);
+        }
+    }
 }

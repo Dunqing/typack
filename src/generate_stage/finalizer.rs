@@ -24,6 +24,33 @@ use crate::types::Module;
 use super::namespace::{get_or_create_ns_name, sanitize_to_identifier};
 use super::types::{ExternalImport, ImportSpecifier, ImportSpecifierKind};
 
+/// Lightweight rename-only visitor. Applies symbol renames (canonical names +
+/// import renames) without performing any structural mutations.
+pub(super) struct RenameApplier<'a, 's> {
+    pub allocator: &'a oxc_allocator::Allocator,
+    pub scoping: &'s Scoping,
+    pub renamed_symbols: &'s FxHashMap<SymbolId, String>,
+}
+
+impl<'a> VisitMut<'a> for RenameApplier<'a, '_> {
+    fn visit_binding_identifier(&mut self, ident: &mut oxc_ast::ast::BindingIdentifier<'a>) {
+        if let Some(symbol_id) = ident.symbol_id.get()
+            && let Some(new_name) = self.renamed_symbols.get(&symbol_id)
+        {
+            ident.name = Ident::from_in(new_name.as_str(), self.allocator);
+        }
+    }
+
+    fn visit_identifier_reference(&mut self, ident: &mut oxc_ast::ast::IdentifierReference<'a>) {
+        if let Some(ref_id) = ident.reference_id.get()
+            && let Some(symbol_id) = self.scoping.get_reference(ref_id).symbol_id()
+            && let Some(new_name) = self.renamed_symbols.get(&symbol_id)
+        {
+            ident.name = Ident::from_in(new_name.as_str(), self.allocator);
+        }
+    }
+}
+
 pub(super) fn ensure_declare_on_declaration(decl: &mut Declaration<'_>) {
     match decl {
         Declaration::VariableDeclaration(d) => d.declare = true,

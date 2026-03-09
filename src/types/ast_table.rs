@@ -7,9 +7,15 @@ use crate::types::ModuleIdx;
 
 pub struct AstTable<'a>(IndexVec<ModuleIdx, Program<'a>>);
 
+impl Default for AstTable<'_> {
+    fn default() -> Self {
+        Self(IndexVec::new())
+    }
+}
+
 impl<'a> AstTable<'a> {
     pub fn new() -> Self {
-        Self(IndexVec::new())
+        Self::default()
     }
 
     pub fn push(&mut self, program: Program<'a>) -> ModuleIdx {

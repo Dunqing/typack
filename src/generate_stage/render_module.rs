@@ -3,7 +3,7 @@
 use std::fmt::Write;
 use std::path::PathBuf;
 
-use oxc_allocator::{Allocator, CloneIn};
+use oxc_allocator::{Allocator, CloneIn, TakeIn};
 use oxc_ast::AstBuilder;
 use oxc_ast::ast::{
     ExportDefaultDeclarationKind, IdentifierReference, Statement, TSTypeName, TSTypeQuery,
@@ -33,7 +33,7 @@ pub(super) struct RenderedModule {
 }
 
 pub(super) fn render_module<'a>(
-    scan_result: &ScanStageOutput<'a>,
+    scan_result: &mut ScanStageOutput<'a>,
     allocator: &'a Allocator,
     module_idx: ModuleIdx,
     meta: &ModuleLinkMeta,
@@ -42,11 +42,11 @@ pub(super) fn render_module<'a>(
     sourcemap_enabled: bool,
     cwd: &std::path::Path,
     acc: &mut GenerateAcc,
+    single_entry: bool,
 ) -> Option<RenderedModule> {
     let ns_wrap = per_entry.namespace_wraps.get(&module_idx);
     let ast = AstBuilder::new(allocator);
     let module = &scan_result.module_table[module_idx];
-    let program_body = &scan_result.ast_table[module_idx].body;
 
     // Phase 2: Selective clone + transform — only clone statements that
     // survive tree-shaking, and for unwrapped exports clone only the inner
@@ -57,11 +57,17 @@ pub(super) fn render_module<'a>(
         match action {
             StatementAction::Skip => {}
             StatementAction::Include => {
-                let stmt = program_body[i].clone_in_with_semantic_ids(allocator);
+                let stmt = if single_entry {
+                    scan_result.ast_table[module_idx].body[i].take_in(allocator)
+                } else {
+                    scan_result.ast_table[module_idx].body[i].clone_in_with_semantic_ids(allocator)
+                };
                 transformed_body.push(stmt);
             }
             StatementAction::UnwrapExportDeclaration => {
-                let Statement::ExportNamedDeclaration(export) = &program_body[i] else {
+                let Statement::ExportNamedDeclaration(export) =
+                    &scan_result.ast_table[module_idx].body[i]
+                else {
                     unreachable!()
                 };
                 let mut decl =
@@ -71,7 +77,9 @@ pub(super) fn render_module<'a>(
                 transformed_body.push(Statement::from(decl));
             }
             StatementAction::UnwrapExportDefault => {
-                let Statement::ExportDefaultDeclaration(export_default) = &program_body[i] else {
+                let Statement::ExportDefaultDeclaration(export_default) =
+                    &scan_result.ast_table[module_idx].body[i]
+                else {
                     unreachable!()
                 };
                 let declaration = export_default.declaration.clone_in_with_semantic_ids(allocator);
@@ -106,11 +114,16 @@ pub(super) fn render_module<'a>(
         return None;
     }
 
-    // Build merged rename map (symbol renames from link stage + import renames).
-    let merged_renames =
-        build_merged_renames(&link_output.canonical_names, module_idx, &meta.import_renames);
+    // For single-entry: compute and apply renames inline (full DtsFinalizer).
+    // For multi-entry: renames are pre-applied to the AST, so use empty rename
+    // map and only run the structural mutation parts of DtsFinalizer.
+    let merged_renames = if single_entry {
+        build_merged_renames(&link_output.canonical_names, module_idx, &meta.import_renames)
+    } else {
+        FxHashMap::default()
+    };
 
-    // Apply DtsFinalizer: unified rename + rewrite pass.
+    // Apply DtsFinalizer: rename + rewrite pass (renames are no-op for multi-entry).
     let external_ns_members = {
         let mut finalizer = DtsFinalizer {
             ast,
@@ -293,7 +306,7 @@ pub(super) fn render_module<'a>(
 
 /// Build merged rename map combining symbol renames from link stage
 /// and import renames from module meta.
-fn build_merged_renames(
+pub(super) fn build_merged_renames(
     canonical_names: &CanonicalNames,
     module_idx: ModuleIdx,
     import_renames: &FxHashMap<SymbolId, String>,
