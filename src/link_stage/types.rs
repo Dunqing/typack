@@ -34,6 +34,24 @@ pub struct ModuleLinkMeta {
     pub reexported_import_names: FxHashSet<String>,
 }
 
+/// An exported name with optional rename info.
+pub struct ExportedName {
+    /// The local name (used in the declaration).
+    pub local: String,
+    /// The exported name (used in the export statement). Same as local unless renamed.
+    pub exported: String,
+    /// Whether this specifier should be emitted with `type` modifier.
+    pub is_type_only: bool,
+}
+
+/// Info for creating a namespace wrapper around a module.
+pub struct NamespaceWrapInfo {
+    /// The namespace name, e.g. `foo_d_exports`.
+    pub namespace_name: String,
+    /// Exported names from the wrapped module (for the namespace export list).
+    pub export_names: Vec<ExportedName>,
+}
+
 /// Rename plan for resolving name conflicts across bundled modules.
 ///
 /// When multiple modules declare names that collide, the link stage builds a rename
@@ -154,6 +172,14 @@ pub struct PerEntryLinkData {
     pub needed_names_plan: NeededNamesPlan,
     /// Pre-computed per-module analysis from the link stage.
     pub module_metas: FxHashMap<ModuleIdx, ModuleLinkMeta>,
+    /// Modules that need namespace wrappers for this entry.
+    pub namespace_wraps: FxHashMap<ModuleIdx, NamespaceWrapInfo>,
+    /// Entry-level `import * as X` aliases: local symbol → source module.
+    pub namespace_aliases: FxHashMap<SymbolId, ModuleIdx>,
+    /// Reserved declaration names (from global + namespace wrap names).
+    pub helper_reserved_names: FxHashSet<String>,
+    /// Warnings produced during namespace deconfliction.
+    pub namespace_warnings: Vec<OxcDiagnostic>,
 }
 
 impl RenamePlan {

@@ -10,13 +10,11 @@ use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::helpers::collect_decl_names;
-use crate::link_stage::RenamePlan;
+use crate::link_stage::{ExportedName, NamespaceWrapInfo, RenamePlan};
 use crate::scan_stage::ScanResult;
 use crate::types::ModuleIdx;
 
-use super::types::{
-    ExportedName, ExternalImport, ImportSpecifier, ImportSpecifierKind, NamespaceWrapInfo,
-};
+use super::types::{ExternalImport, ImportSpecifier, ImportSpecifierKind};
 
 /// Collect exported names from a declaration for the consolidated `export { ... }` statement.
 ///
@@ -158,7 +156,7 @@ pub(super) fn collect_module_exports(
     }
 }
 
-pub(super) fn apply_namespace_wrap_renames(
+pub fn apply_namespace_wrap_renames(
     namespace_wraps: &mut FxHashMap<ModuleIdx, NamespaceWrapInfo>,
     rename_plan: &RenamePlan,
     scan_result: &ScanResult<'_>,
@@ -226,7 +224,7 @@ pub fn collect_reserved_decl_names(
     names
 }
 
-pub(super) fn deconflict_namespace_wrap_names(
+pub fn deconflict_namespace_wrap_names(
     namespace_wraps: &mut FxHashMap<ModuleIdx, NamespaceWrapInfo>,
     reserved_names: &FxHashSet<String>,
     warnings: &mut Vec<OxcDiagnostic>,
@@ -263,7 +261,7 @@ pub(super) fn deconflict_namespace_wrap_names(
 /// Returns:
 /// - `namespace_wraps`: modules that need namespace wrappers (module idx → wrap info)
 /// - `namespace_aliases`: `import * as X` aliases in the entry (local name → module idx)
-pub(super) fn pre_scan_namespace_info(
+pub fn pre_scan_namespace_info(
     scan_result: &ScanResult<'_>,
     entry_idx: ModuleIdx,
     all_module_aliases: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>>,
@@ -370,7 +368,6 @@ pub(super) fn pre_scan_namespace_info(
     }
 
     // Second pass: update export lists to use namespace names for aliases.
-    let wrap_keys: Vec<ModuleIdx> = namespace_wraps.keys().copied().collect();
     for module_idx in &wrap_keys {
         let wrap = &namespace_wraps[module_idx];
         let mut updated_exports = Vec::new();

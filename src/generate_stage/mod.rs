@@ -35,9 +35,6 @@ use crate::link_stage::{
 };
 use crate::scan_stage::ScanResult;
 use crate::types::{Module, ModuleIdx};
-use namespace::{
-    apply_namespace_wrap_renames, deconflict_namespace_wrap_names, pre_scan_namespace_info,
-};
 use output_assembler::OutputAssembler;
 use rewriter::{InlineImportAndNamespaceRewriter, SemanticRenamer, ensure_declare_on_declaration};
 use types::*;
@@ -115,31 +112,14 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             output.push_unmapped(format!("{directive}\n"));
         }
 
-        // Pre-scan all modules for namespace import patterns
-        let (mut namespace_wraps, namespace_aliases) = pre_scan_namespace_info(
-            self.scan_result,
-            entry_idx,
-            &self.link_output.all_module_aliases,
-        );
-
-        // Keep namespace wrapper exports aligned with semantic renames.
-        apply_namespace_wrap_renames(&mut namespace_wraps, rename_plan, self.scan_result);
-        let mut helper_reserved_names = self.link_output.reserved_decl_names.clone();
-        deconflict_namespace_wrap_names(
-            &mut namespace_wraps,
-            &helper_reserved_names,
-            &mut acc.warnings,
-        );
-        for wrap in namespace_wraps.values() {
-            helper_reserved_names.insert(wrap.namespace_name.clone());
-        }
+        acc.warnings.extend(per_entry.namespace_warnings.iter().cloned());
 
         let shared = GenerateSharedCtx {
-            namespace_wraps: &namespace_wraps,
-            namespace_aliases: &namespace_aliases,
+            namespace_wraps: &per_entry.namespace_wraps,
+            namespace_aliases: &per_entry.namespace_aliases,
             rename_plan,
             default_export_names: &self.link_output.default_export_names,
-            helper_reserved_names: &helper_reserved_names,
+            helper_reserved_names: &per_entry.helper_reserved_names,
         };
 
         let mut module_outputs: VecDeque<ModuleOutput> = VecDeque::new();

@@ -5,17 +5,8 @@ use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::link_stage::RenamePlan;
+pub(super) use crate::link_stage::{ExportedName, NamespaceWrapInfo};
 use crate::types::ModuleIdx;
-
-/// An exported name with optional rename info.
-pub(super) struct ExportedName {
-    /// The local name (used in the declaration).
-    pub(super) local: String,
-    /// The exported name (used in the export statement). Same as local unless renamed.
-    pub(super) exported: String,
-    /// Whether this specifier should be emitted with `type` modifier.
-    pub(super) is_type_only: bool,
-}
 
 /// An import specifier collected from an external import.
 pub(super) struct ImportSpecifier {
@@ -54,14 +45,6 @@ pub(super) struct ExternalImport {
 pub(super) struct ExternalStarExport {
     pub(super) source: String,
     pub(super) is_type_only: bool,
-}
-
-/// Info for creating a namespace wrapper around a module.
-pub(super) struct NamespaceWrapInfo {
-    /// The namespace name, e.g. `foo_d_exports`.
-    pub(super) namespace_name: String,
-    /// Exported names from the wrapped module (for the namespace export list).
-    pub(super) export_names: Vec<ExportedName>,
 }
 
 pub(super) struct ModuleOutput {

@@ -26,7 +26,10 @@ pub use resolved_exports::build_resolved_exports;
 pub use types::NeededKindFlags;
 #[cfg(test)]
 use types::NeededNamesPlan;
-pub use types::{LinkStageOutput, ModuleLinkMeta, PerEntryLinkData, RenamePlan, StatementAction};
+pub use types::{
+    ExportedName, LinkStageOutput, ModuleLinkMeta, NamespaceWrapInfo, PerEntryLinkData, RenamePlan,
+    StatementAction,
+};
 
 use warnings::collect_link_warnings;
 
@@ -140,7 +143,37 @@ pub fn build_per_entry_link_data(
         })
         .collect();
 
-    PerEntryLinkData { needed_names_plan, module_metas }
+    // Pre-compute namespace info for this entry.
+    let (mut namespace_wraps, namespace_aliases) =
+        crate::generate_stage::namespace::pre_scan_namespace_info(
+            scan_result,
+            entry_idx,
+            &link_output.all_module_aliases,
+        );
+    crate::generate_stage::namespace::apply_namespace_wrap_renames(
+        &mut namespace_wraps,
+        &link_output.rename_plan,
+        scan_result,
+    );
+    let mut helper_reserved_names = link_output.reserved_decl_names.clone();
+    let mut namespace_warnings = Vec::new();
+    crate::generate_stage::namespace::deconflict_namespace_wrap_names(
+        &mut namespace_wraps,
+        &helper_reserved_names,
+        &mut namespace_warnings,
+    );
+    for wrap in namespace_wraps.values() {
+        helper_reserved_names.insert(wrap.namespace_name.clone());
+    }
+
+    PerEntryLinkData {
+        needed_names_plan,
+        module_metas,
+        namespace_wraps,
+        namespace_aliases,
+        helper_reserved_names,
+        namespace_warnings,
+    }
 }
 
 #[cfg(test)]
