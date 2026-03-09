@@ -87,18 +87,17 @@ When multiple modules declare the same name (e.g., two modules both export `Opti
 1. **Pass 1 — Exported names.** Process modules in entry re-export order. The entry's own re-exports determine priority: the first module to claim a name keeps it.
 2. **Pass 2 — Non-exported names.** Process remaining modules in reverse topological order. Later modules keep their original names; earlier ones get `$1`, `$2`, etc. suffixes.
 
-**Two-level mapping:**
+**Per-module mapping:**
 
 ```rust
 struct CanonicalNames {
-    symbols: FxHashMap<SymbolRef, String>,              // Precise: (module, symbol) → name
+    per_module_symbols: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,  // O(1) per-module lookup
     fallback_name_renames: FxHashMap<(ModuleIdx, String), String>,  // For declaration merging
-    per_module_symbols: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,  // Pre-grouped index
     used_names: FxHashSet<String>,
 }
 ```
 
-The primary mapping uses `SymbolRef` (module + symbol ID) for precision. The fallback handles cases where symbol resolution isn't possible (e.g., names from declaration merging across interfaces). The `per_module_symbols` index is built once after all renames are inserted, enabling O(1) per-module lookup.
+Renames are stored grouped by module, giving O(1) per-module lookup without a separate indexing step. The fallback handles cases where symbol resolution isn't possible (e.g., names from declaration merging across interfaces).
 
 ### 2.2 Tree-Shaking
 
@@ -242,11 +241,10 @@ When source maps are enabled, each module's codegen produces a source map mappin
 
 ### Module Identity
 
-| Type        | Description                                                |
-| ----------- | ---------------------------------------------------------- |
-| `ModuleIdx` | 32-bit index into `ModuleTable` and `AstTable`             |
-| `SymbolId`  | Oxc symbol identifier (scoping-aware)                      |
-| `SymbolRef` | `(ModuleIdx, SymbolId)` — globally unique symbol reference |
+| Type        | Description                                    |
+| ----------- | ---------------------------------------------- |
+| `ModuleIdx` | 32-bit index into `ModuleTable` and `AstTable` |
+| `SymbolId`  | Oxc symbol identifier (scoping-aware)          |
 
 ### Export/Import Info (Pre-computed in Scan)
 

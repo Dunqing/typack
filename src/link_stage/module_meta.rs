@@ -7,11 +7,9 @@
 use oxc_ast::ast::{ExportDefaultDeclaration, ExportDefaultDeclarationKind, Statement};
 use oxc_ast_visit::Visit;
 use oxc_semantic::Scoping;
-use oxc_span::Ident;
 use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::helpers::collect_decl_names;
 use crate::link_stage::NeededKindFlags;
 use crate::link_stage::exports::resolve_export_local_name;
 use crate::scan_stage::ScanStageOutput;
@@ -213,25 +211,84 @@ fn analyze_statement<'a>(
 }
 
 /// Collect symbol kinds for the names declared by a `Declaration` node.
+///
+/// Uses `BindingIdentifier.symbol_id` directly instead of name-based lookups
+/// so this remains correct even after AST renames have been applied.
 fn collect_decl_symbol_kinds(
     decl: &oxc_ast::ast::Declaration<'_>,
     scoping: &Scoping,
 ) -> FxHashMap<SymbolId, NeededKindFlags> {
-    let mut names = Vec::new();
-    collect_decl_names(decl, &mut names);
     let declared_kinds = declaration_needed_kinds(decl);
     if declared_kinds.is_empty() {
         return FxHashMap::default();
     }
-    names
-        .iter()
-        .filter_map(|name| {
-            let symbol_id = scoping.get_root_binding(Ident::from(name.as_str()))?;
+    let mut symbol_ids = Vec::new();
+    collect_decl_symbol_ids(decl, &mut symbol_ids);
+    symbol_ids
+        .into_iter()
+        .filter_map(|symbol_id| {
             let kinds = declared_kinds
                 .intersection(NeededKindFlags::from_symbol_flags(scoping.symbol_flags(symbol_id)));
             (!kinds.is_empty()).then_some((symbol_id, kinds))
         })
         .collect()
+}
+
+/// Collect `SymbolId`s directly from declaration binding identifiers.
+///
+/// Unlike `collect_decl_names` + `scoping.get_root_binding()`, this reads
+/// `symbol_id` fields from the AST nodes, making it resilient to AST renames
+/// applied during the multi-entry pre-rename pass.
+fn collect_decl_symbol_ids(decl: &oxc_ast::ast::Declaration<'_>, ids: &mut Vec<SymbolId>) {
+    match decl {
+        oxc_ast::ast::Declaration::VariableDeclaration(var_decl) => {
+            for declarator in &var_decl.declarations {
+                if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &declarator.id
+                    && let Some(symbol_id) = id.symbol_id.get()
+                {
+                    ids.push(symbol_id);
+                }
+            }
+        }
+        oxc_ast::ast::Declaration::FunctionDeclaration(func) => {
+            if let Some(id) = &func.id
+                && let Some(symbol_id) = id.symbol_id.get()
+            {
+                ids.push(symbol_id);
+            }
+        }
+        oxc_ast::ast::Declaration::ClassDeclaration(class) => {
+            if let Some(id) = &class.id
+                && let Some(symbol_id) = id.symbol_id.get()
+            {
+                ids.push(symbol_id);
+            }
+        }
+        oxc_ast::ast::Declaration::TSTypeAliasDeclaration(alias) => {
+            if let Some(symbol_id) = alias.id.symbol_id.get() {
+                ids.push(symbol_id);
+            }
+        }
+        oxc_ast::ast::Declaration::TSInterfaceDeclaration(iface) => {
+            if let Some(symbol_id) = iface.id.symbol_id.get() {
+                ids.push(symbol_id);
+            }
+        }
+        oxc_ast::ast::Declaration::TSEnumDeclaration(enum_decl) => {
+            if let Some(symbol_id) = enum_decl.id.symbol_id.get() {
+                ids.push(symbol_id);
+            }
+        }
+        oxc_ast::ast::Declaration::TSModuleDeclaration(module_decl) => {
+            if let oxc_ast::ast::TSModuleDeclarationName::Identifier(id) = &module_decl.id
+                && let Some(symbol_id) = id.symbol_id.get()
+            {
+                ids.push(symbol_id);
+            }
+        }
+        oxc_ast::ast::Declaration::TSGlobalDeclaration(_)
+        | oxc_ast::ast::Declaration::TSImportEqualsDeclaration(_) => {}
+    }
 }
 
 fn declaration_needed_kinds(decl: &oxc_ast::ast::Declaration<'_>) -> NeededKindFlags {
@@ -264,33 +321,41 @@ fn declaration_matches_needed_kinds(
         })
 }
 
+/// Uses `BindingIdentifier.symbol_id` directly instead of name-based lookups
+/// so this remains correct even after AST renames have been applied.
 fn export_default_declaration_matches_needed_kinds(
     export_default: &ExportDefaultDeclaration<'_>,
     scoping: &Scoping,
     needed: &FxHashMap<SymbolId, NeededKindFlags>,
 ) -> bool {
-    let (name, decl_kinds) = match &export_default.declaration {
+    let (symbol_id, decl_kinds) = match &export_default.declaration {
         ExportDefaultDeclarationKind::FunctionDeclaration(func) => {
             let Some(id) = &func.id else {
                 return true;
             };
-            (id.name.as_str(), NeededKindFlags::VALUE)
+            let Some(symbol_id) = id.symbol_id.get() else {
+                return true;
+            };
+            (symbol_id, NeededKindFlags::VALUE)
         }
         ExportDefaultDeclarationKind::ClassDeclaration(class) => {
             let Some(id) = &class.id else {
                 return true;
             };
-            (id.name.as_str(), NeededKindFlags::ALL)
+            let Some(symbol_id) = id.symbol_id.get() else {
+                return true;
+            };
+            (symbol_id, NeededKindFlags::ALL)
         }
         ExportDefaultDeclarationKind::TSInterfaceDeclaration(iface) => {
-            (iface.id.name.as_str(), NeededKindFlags::TYPE)
+            let Some(symbol_id) = iface.id.symbol_id.get() else {
+                return true;
+            };
+            (symbol_id, NeededKindFlags::TYPE)
         }
         _ => return true,
     };
 
-    let Some(symbol_id) = scoping.get_root_binding(Ident::from(name)) else {
-        return true;
-    };
     let decl_kinds = decl_kinds
         .intersection(NeededKindFlags::from_symbol_flags(scoping.symbol_flags(symbol_id)));
     decl_kinds.is_empty() || needed.get(&symbol_id).is_some_and(|k| k.intersects(decl_kinds))

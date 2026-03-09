@@ -52,6 +52,7 @@ pub struct Bundle<'a> {
     scan_output: ScanStageOutput<'a>,
     link_output: LinkStageOutput,
     allocator: &'a Allocator,
+    generated: bool,
 }
 
 impl<'a> Bundle<'a> {
@@ -68,7 +69,7 @@ impl<'a> Bundle<'a> {
         let scan_output = ScanStage::new(options, allocator).scan()?;
         let link_stage = LinkStage::new(&scan_output);
         let link_output = link_stage.link();
-        Ok(Self { scan_output, link_output, allocator })
+        Ok(Self { scan_output, link_output, allocator, generated: false })
     }
 
     /// Run the generate stage, producing one output per entry point.
@@ -79,7 +80,14 @@ impl<'a> Bundle<'a> {
     /// Takes `&mut self` because the single-entry fast path takes ownership of
     /// AST statements (via `TakeIn`) to avoid cloning. This means `generate`
     /// can only be called once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called more than once on the same `Bundle` instance.
     pub fn generate(&mut self, options: &TypackOptions) -> BundleResult {
+        assert!(!self.generated, "Bundle::generate can only be called once");
+        self.generated = true;
+
         debug_assert_eq!(
             options.input.len(),
             self.scan_output.entry_points.len(),
