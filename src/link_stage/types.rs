@@ -6,6 +6,52 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::types::{Module, ModuleIdx};
 
+/// What to do with each statement during the transform phase.
+pub enum StatementAction {
+    /// Skip this statement entirely (tree-shaken, consumed as metadata, or internal import).
+    Skip,
+    /// Move this statement as-is and include in output.
+    Include,
+    /// Move the inner declaration from an `export named`, add `declare`, adjust span.
+    UnwrapExportDeclaration,
+    /// Move the inner declaration from an `export default`, convert to named declaration.
+    UnwrapExportDefault,
+}
+
+/// Per-module analysis results computed during the link stage.
+/// Contains inclusion decisions and import resolution data
+/// that the generate stage consumes.
+pub struct ModuleLinkMeta {
+    /// Per-statement actions (indexed by position in original body).
+    pub statement_actions: Vec<StatementAction>,
+    /// Import renames: local symbol → resolved name from source module.
+    pub import_renames: FxHashMap<SymbolId, String>,
+    /// Internal namespace alias symbols.
+    pub ns_aliases: FxHashSet<SymbolId>,
+    /// External namespace info: symbol → (source, local_name).
+    pub external_ns_info: FxHashMap<SymbolId, (String, String)>,
+    /// Names from re-exported imports that must survive pruning.
+    pub reexported_import_names: FxHashSet<String>,
+}
+
+/// An exported name with optional rename info.
+pub struct ExportedName {
+    /// The local name (used in the declaration).
+    pub local: String,
+    /// The exported name (used in the export statement). Same as local unless renamed.
+    pub exported: String,
+    /// Whether this specifier should be emitted with `type` modifier.
+    pub is_type_only: bool,
+}
+
+/// Info for creating a namespace wrapper around a module.
+pub struct NamespaceWrapInfo {
+    /// The namespace name, e.g. `foo_d_exports`.
+    pub namespace_name: String,
+    /// Exported names from the wrapped module (for the namespace export list).
+    pub export_names: Vec<ExportedName>,
+}
+
 /// Rename plan for resolving name conflicts across bundled modules.
 ///
 /// When multiple modules declare names that collide, the link stage builds a rename
@@ -116,13 +162,24 @@ pub struct LinkStageOutput {
     pub rename_plan: RenamePlan,
     pub default_export_names: FxHashMap<ModuleIdx, String>,
     pub reserved_decl_names: FxHashSet<String>,
-    pub all_module_aliases: FxHashMap<(ModuleIdx, SymbolId), ModuleIdx>,
+    pub all_module_aliases: FxHashMap<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>>,
     pub warnings: Vec<OxcDiagnostic>,
 }
 
-/// Per-entry link data containing only the needed names plan for the entry.
+/// Per-entry link data containing the needed names plan and per-module link metadata.
 pub struct PerEntryLinkData {
+    #[expect(dead_code)]
     pub needed_names_plan: NeededNamesPlan,
+    /// Pre-computed per-module analysis from the link stage.
+    pub module_metas: FxHashMap<ModuleIdx, ModuleLinkMeta>,
+    /// Modules that need namespace wrappers for this entry.
+    pub namespace_wraps: FxHashMap<ModuleIdx, NamespaceWrapInfo>,
+    /// Entry-level `import * as X` aliases: local symbol → source module.
+    pub namespace_aliases: FxHashMap<SymbolId, ModuleIdx>,
+    /// Reserved declaration names (from global + namespace wrap names).
+    pub helper_reserved_names: FxHashSet<String>,
+    /// Warnings produced during namespace deconfliction.
+    pub namespace_warnings: Vec<OxcDiagnostic>,
 }
 
 impl RenamePlan {

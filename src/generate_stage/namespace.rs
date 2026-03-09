@@ -10,13 +10,11 @@ use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::helpers::collect_decl_names;
-use crate::link_stage::RenamePlan;
+use crate::link_stage::{ExportedName, NamespaceWrapInfo, RenamePlan};
 use crate::scan_stage::ScanResult;
 use crate::types::ModuleIdx;
 
-use super::types::{
-    ExportedName, ExternalImport, ImportSpecifier, ImportSpecifierKind, NamespaceWrapInfo,
-};
+use super::types::{ExternalImport, ImportSpecifier, ImportSpecifierKind};
 
 /// Collect exported names from a declaration for the consolidated `export { ... }` statement.
 ///
@@ -158,7 +156,7 @@ pub(super) fn collect_module_exports(
     }
 }
 
-pub(super) fn apply_namespace_wrap_renames(
+pub fn apply_namespace_wrap_renames(
     namespace_wraps: &mut FxHashMap<ModuleIdx, NamespaceWrapInfo>,
     rename_plan: &RenamePlan,
     scan_result: &ScanResult<'_>,
@@ -226,7 +224,7 @@ pub fn collect_reserved_decl_names(
     names
 }
 
-pub(super) fn deconflict_namespace_wrap_names(
+pub fn deconflict_namespace_wrap_names(
     namespace_wraps: &mut FxHashMap<ModuleIdx, NamespaceWrapInfo>,
     reserved_names: &FxHashSet<String>,
     warnings: &mut Vec<OxcDiagnostic>,
@@ -263,24 +261,18 @@ pub(super) fn deconflict_namespace_wrap_names(
 /// Returns:
 /// - `namespace_wraps`: modules that need namespace wrappers (module idx → wrap info)
 /// - `namespace_aliases`: `import * as X` aliases in the entry (local name → module idx)
-pub(super) fn pre_scan_namespace_info(
+pub fn pre_scan_namespace_info(
     scan_result: &ScanResult<'_>,
     entry_idx: ModuleIdx,
-    all_module_aliases: &FxHashMap<(ModuleIdx, SymbolId), ModuleIdx>,
+    all_module_aliases: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>>,
 ) -> (FxHashMap<ModuleIdx, NamespaceWrapInfo>, FxHashMap<SymbolId, ModuleIdx>) {
     let entry = &scan_result.modules[entry_idx];
 
     let mut namespace_wraps: FxHashMap<ModuleIdx, NamespaceWrapInfo> = FxHashMap::default();
     // Entry-level namespace aliases: `import * as X` SymbolId → source module idx
-    let mut namespace_aliases: FxHashMap<SymbolId, ModuleIdx> = FxHashMap::default();
+    let namespace_aliases: FxHashMap<SymbolId, ModuleIdx> =
+        all_module_aliases.get(&entry_idx).cloned().unwrap_or_default();
     let mut re_exported_names: Vec<SymbolId> = Vec::new();
-
-    // Build entry-level namespace aliases from the pre-computed all_module_aliases
-    for (&(module_idx, symbol_id), &target_idx) in all_module_aliases {
-        if module_idx == entry_idx {
-            namespace_aliases.insert(symbol_id, target_idx);
-        }
-    }
 
     // Scan entry for export patterns (using stored AST)
     for stmt in &entry.program.body {
@@ -349,7 +341,8 @@ pub(super) fn pre_scan_namespace_info(
                 .scoping
                 .get_root_binding(Ident::from(exp.local.as_str()));
             if let Some(symbol_id) = symbol_key
-                && let Some(target_idx) = all_module_aliases.get(&(*module_idx, symbol_id))
+                && let Some(target_idx) =
+                    all_module_aliases.get(module_idx).and_then(|m| m.get(&symbol_id))
                 && !namespace_wraps.contains_key(target_idx)
                 && !new_wraps.iter().any(|(idx, _)| idx == target_idx)
             {
@@ -375,7 +368,6 @@ pub(super) fn pre_scan_namespace_info(
     }
 
     // Second pass: update export lists to use namespace names for aliases.
-    let wrap_keys: Vec<ModuleIdx> = namespace_wraps.keys().copied().collect();
     for module_idx in &wrap_keys {
         let wrap = &namespace_wraps[module_idx];
         let mut updated_exports = Vec::new();
@@ -384,7 +376,8 @@ pub(super) fn pre_scan_namespace_info(
                 .scoping
                 .get_root_binding(Ident::from(exp.local.as_str()));
             if let Some(symbol_id) = symbol_key
-                && let Some(target_idx) = all_module_aliases.get(&(*module_idx, symbol_id))
+                && let Some(target_idx) =
+                    all_module_aliases.get(module_idx).and_then(|m| m.get(&symbol_id))
                 && let Some(target_wrap) = namespace_wraps.get(target_idx)
             {
                 updated_exports.push(ExportedName {

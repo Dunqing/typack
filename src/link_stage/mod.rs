@@ -2,6 +2,7 @@
 //! deconfliction.
 
 pub mod exports;
+pub mod module_meta;
 mod needed_names;
 mod rename;
 pub mod resolved_exports;
@@ -25,7 +26,10 @@ pub use resolved_exports::build_resolved_exports;
 pub use types::NeededKindFlags;
 #[cfg(test)]
 use types::NeededNamesPlan;
-pub use types::{LinkStageOutput, PerEntryLinkData, RenamePlan};
+pub use types::{
+    ExportedName, LinkStageOutput, ModuleLinkMeta, NamespaceWrapInfo, PerEntryLinkData, RenamePlan,
+    StatementAction,
+};
 
 use warnings::collect_link_warnings;
 
@@ -53,8 +57,10 @@ pub fn build_link_stage_output(
     let reserved_decl_names =
         crate::generate_stage::namespace::collect_reserved_decl_names(scan_result, &rename_plan);
 
-    // Compute all_module_aliases by scanning all modules for ImportNamespaceSpecifier
-    let mut all_module_aliases: FxHashMap<(ModuleIdx, SymbolId), ModuleIdx> = FxHashMap::default();
+    // Compute all_module_aliases by scanning all modules for ImportNamespaceSpecifier.
+    // Grouped by module index for O(1) per-entry lookup.
+    let mut all_module_aliases: FxHashMap<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>> =
+        FxHashMap::default();
     for module in &scan_result.modules {
         for stmt in &module.program.body {
             if let Statement::ImportDeclaration(import_decl) = stmt
@@ -67,7 +73,10 @@ pub fn build_link_stage_output(
                             module.resolve_internal_specifier(import_decl.source.value.as_str())
                         && let Some(symbol_id) = ns.local.symbol_id.get()
                     {
-                        all_module_aliases.insert((module.idx, symbol_id), target_idx);
+                        all_module_aliases
+                            .entry(module.idx)
+                            .or_default()
+                            .insert(symbol_id, target_idx);
                     }
                 }
             }
@@ -85,12 +94,14 @@ pub fn build_link_stage_output(
 
 /// Build per-entry link data for a single entry point.
 ///
-/// Computes needed names for just the specified entry, enabling per-entry
-/// output generation without re-scanning.
+/// Computes needed names for just the specified entry, then pre-computes
+/// per-module link metadata (statement actions, import renames, etc.) that
+/// the generate stage consumes.
 pub fn build_per_entry_link_data(
     scan_result: &ScanResult<'_>,
     entry_idx: ModuleIdx,
     ctx: &NeededNamesCtx,
+    link_output: &LinkStageOutput,
 ) -> PerEntryLinkData {
     let mut needed_names_plan =
         build_needed_names_with_ctx(&scan_result.modules[entry_idx], scan_result, ctx);
@@ -116,7 +127,53 @@ pub fn build_per_entry_link_data(
         }
     }
 
-    PerEntryLinkData { needed_names_plan }
+    // Pre-compute per-module link metadata for all modules in the plan.
+    let module_metas: FxHashMap<ModuleIdx, types::ModuleLinkMeta> = needed_names_plan
+        .symbol_kinds
+        .iter()
+        .map(|(&module_idx, kinds)| {
+            let meta = module_meta::compute_module_link_meta(
+                scan_result,
+                module_idx,
+                kinds.as_ref(),
+                &link_output.rename_plan,
+                &link_output.default_export_names,
+            );
+            (module_idx, meta)
+        })
+        .collect();
+
+    // Pre-compute namespace info for this entry.
+    let (mut namespace_wraps, namespace_aliases) =
+        crate::generate_stage::namespace::pre_scan_namespace_info(
+            scan_result,
+            entry_idx,
+            &link_output.all_module_aliases,
+        );
+    crate::generate_stage::namespace::apply_namespace_wrap_renames(
+        &mut namespace_wraps,
+        &link_output.rename_plan,
+        scan_result,
+    );
+    let mut helper_reserved_names = link_output.reserved_decl_names.clone();
+    let mut namespace_warnings = Vec::new();
+    crate::generate_stage::namespace::deconflict_namespace_wrap_names(
+        &mut namespace_wraps,
+        &helper_reserved_names,
+        &mut namespace_warnings,
+    );
+    for wrap in namespace_wraps.values() {
+        helper_reserved_names.insert(wrap.namespace_name.clone());
+    }
+
+    PerEntryLinkData {
+        needed_names_plan,
+        module_metas,
+        namespace_wraps,
+        namespace_aliases,
+        helper_reserved_names,
+        namespace_warnings,
+    }
 }
 
 #[cfg(test)]
