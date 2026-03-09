@@ -6,6 +6,34 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::types::{Module, ModuleIdx};
 
+/// What to do with each statement during the transform phase.
+pub enum StatementAction {
+    /// Skip this statement entirely (tree-shaken, consumed as metadata, or internal import).
+    Skip,
+    /// Clone this statement as-is and include in output.
+    Include,
+    /// Clone the inner declaration from an `export named`, add `declare`, adjust span.
+    UnwrapExportDeclaration,
+    /// Clone the inner declaration from an `export default`, convert to named declaration.
+    UnwrapExportDefault,
+}
+
+/// Per-module analysis results computed during the link stage.
+/// Contains inclusion decisions and import resolution data
+/// that the generate stage consumes.
+pub struct ModuleLinkMeta {
+    /// Per-statement actions (indexed by position in original body).
+    pub statement_actions: Vec<StatementAction>,
+    /// Import renames: local symbol → resolved name from source module.
+    pub import_renames: FxHashMap<SymbolId, String>,
+    /// Internal namespace alias symbols.
+    pub ns_aliases: FxHashSet<SymbolId>,
+    /// External namespace info: symbol → (source, local_name).
+    pub external_ns_info: FxHashMap<SymbolId, (String, String)>,
+    /// Names from re-exported imports that must survive pruning.
+    pub reexported_import_names: FxHashSet<String>,
+}
+
 /// Rename plan for resolving name conflicts across bundled modules.
 ///
 /// When multiple modules declare names that collide, the link stage builds a rename
@@ -120,9 +148,12 @@ pub struct LinkStageOutput {
     pub warnings: Vec<OxcDiagnostic>,
 }
 
-/// Per-entry link data containing only the needed names plan for the entry.
+/// Per-entry link data containing the needed names plan and per-module link metadata.
 pub struct PerEntryLinkData {
+    #[expect(dead_code)]
     pub needed_names_plan: NeededNamesPlan,
+    /// Pre-computed per-module analysis from the link stage.
+    pub module_metas: FxHashMap<ModuleIdx, ModuleLinkMeta>,
 }
 
 impl RenamePlan {

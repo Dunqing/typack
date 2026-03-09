@@ -2,6 +2,7 @@
 //! deconfliction.
 
 pub mod exports;
+pub mod module_meta;
 mod needed_names;
 mod rename;
 pub mod resolved_exports;
@@ -25,7 +26,7 @@ pub use resolved_exports::build_resolved_exports;
 pub use types::NeededKindFlags;
 #[cfg(test)]
 use types::NeededNamesPlan;
-pub use types::{LinkStageOutput, PerEntryLinkData, RenamePlan};
+pub use types::{LinkStageOutput, ModuleLinkMeta, PerEntryLinkData, RenamePlan, StatementAction};
 
 use warnings::collect_link_warnings;
 
@@ -85,12 +86,14 @@ pub fn build_link_stage_output(
 
 /// Build per-entry link data for a single entry point.
 ///
-/// Computes needed names for just the specified entry, enabling per-entry
-/// output generation without re-scanning.
+/// Computes needed names for just the specified entry, then pre-computes
+/// per-module link metadata (statement actions, import renames, etc.) that
+/// the generate stage consumes.
 pub fn build_per_entry_link_data(
     scan_result: &ScanResult<'_>,
     entry_idx: ModuleIdx,
     ctx: &NeededNamesCtx,
+    link_output: &LinkStageOutput,
 ) -> PerEntryLinkData {
     let mut needed_names_plan =
         build_needed_names_with_ctx(&scan_result.modules[entry_idx], scan_result, ctx);
@@ -116,7 +119,23 @@ pub fn build_per_entry_link_data(
         }
     }
 
-    PerEntryLinkData { needed_names_plan }
+    // Pre-compute per-module link metadata for all modules in the plan.
+    let module_metas: FxHashMap<ModuleIdx, types::ModuleLinkMeta> = needed_names_plan
+        .symbol_kinds
+        .iter()
+        .map(|(&module_idx, kinds)| {
+            let meta = module_meta::compute_module_link_meta(
+                scan_result,
+                module_idx,
+                kinds.as_ref(),
+                &link_output.rename_plan,
+                &link_output.default_export_names,
+            );
+            (module_idx, meta)
+        })
+        .collect();
+
+    PerEntryLinkData { needed_names_plan, module_metas }
 }
 
 #[cfg(test)]
