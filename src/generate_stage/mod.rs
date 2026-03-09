@@ -48,10 +48,6 @@ pub struct GenerateStage<'a, 'b> {
     cjs_default: bool,
     cwd: &'b Path,
     link_output: &'b LinkStageOutput,
-    /// Tracks import renames applied to each module body by the previous entry.
-    /// Used to fold undo into the next entry's rename pass, avoiding a separate
-    /// AST walk to reverse renames.
-    prev_import_renames: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
 }
 
 /// Output from generate stage.
@@ -70,15 +66,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         cwd: &'b Path,
         link_output: &'b LinkStageOutput,
     ) -> Self {
-        Self {
-            scan_result,
-            allocator,
-            sourcemap,
-            cjs_default,
-            cwd,
-            link_output,
-            prev_import_renames: FxHashMap::default(),
-        }
+        Self { scan_result, allocator, sourcemap, cjs_default, cwd, link_output }
     }
 
     /// Generate the bundled `.d.ts` output for all entries.
@@ -360,16 +348,13 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         }
 
         // Apply semantic renames (symbol renames from link stage + import renames).
-        // Also folds undo of previous entry's import renames into this pass.
         {
             let module = &self.scan_result.modules[module_idx];
-            let prev = self.prev_import_renames.get(&module_idx);
             apply_semantic_renames(
                 module,
                 self.allocator,
                 &self.link_output.rename_plan,
                 &meta.import_renames,
-                prev,
                 &mut transformed_body,
             );
         }
@@ -491,14 +476,6 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             directives,
             transformed_body,
         );
-
-        // Track current import renames so the next entry's rename pass can
-        // undo them without a separate AST walk.
-        if meta.import_renames.is_empty() {
-            self.prev_import_renames.remove(&module_idx);
-        } else {
-            self.prev_import_renames.insert(module_idx, meta.import_renames.clone());
-        }
 
         let input_sourcemap = self.scan_result.modules[module_idx].input_sourcemap.clone();
 
@@ -702,33 +679,18 @@ fn prune_unused_imports(
 
 /// Apply semantic renames to the transformed AST body.
 ///
-/// Merges three rename sources into a single symbol map:
+/// Merges two rename sources into a single symbol map:
 /// 1. Symbol renames from the link stage (conflict resolution, e.g. `Foo` → `Foo$1`).
-/// 2. Current import renames (mapping local import bindings to their resolved names).
-/// 3. Undo entries for previous import renames — symbols renamed by a prior entry
-///    but not by the current one are reset to their base name (link-renamed or original).
+/// 2. Import renames (mapping local import bindings to their resolved names).
 fn apply_semantic_renames<'a>(
     module: &Module<'a>,
     allocator: &'a Allocator,
     rename_plan: &RenamePlan,
     import_renames: &FxHashMap<SymbolId, String>,
-    prev_import_renames: Option<&FxHashMap<SymbolId, String>>,
     body: &mut oxc_allocator::Vec<'a, Statement<'a>>,
 ) {
     let mut renamed_symbols =
         rename_plan.module_symbol_renames(module.idx).cloned().unwrap_or_default();
-
-    // Undo previous import renames for symbols not renamed by the current entry.
-    if let Some(prev) = prev_import_renames {
-        for &sym_id in prev.keys() {
-            if !import_renames.contains_key(&sym_id) {
-                let base = rename_plan
-                    .resolve_symbol(module.idx, sym_id)
-                    .unwrap_or_else(|| module.scoping.symbol_name(sym_id));
-                renamed_symbols.insert(sym_id, base.to_string());
-            }
-        }
-    }
 
     renamed_symbols.extend(import_renames.iter().map(|(k, v)| (*k, v.clone())));
 
