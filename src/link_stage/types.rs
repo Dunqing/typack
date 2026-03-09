@@ -144,7 +144,7 @@ pub struct LinkStageOutput {
     pub rename_plan: RenamePlan,
     pub default_export_names: FxHashMap<ModuleIdx, String>,
     pub reserved_decl_names: FxHashSet<String>,
-    pub all_module_aliases: FxHashMap<(ModuleIdx, SymbolId), ModuleIdx>,
+    pub all_module_aliases: FxHashMap<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>>,
     pub warnings: Vec<OxcDiagnostic>,
 }
 

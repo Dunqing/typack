@@ -266,21 +266,15 @@ pub(super) fn deconflict_namespace_wrap_names(
 pub(super) fn pre_scan_namespace_info(
     scan_result: &ScanResult<'_>,
     entry_idx: ModuleIdx,
-    all_module_aliases: &FxHashMap<(ModuleIdx, SymbolId), ModuleIdx>,
+    all_module_aliases: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>>,
 ) -> (FxHashMap<ModuleIdx, NamespaceWrapInfo>, FxHashMap<SymbolId, ModuleIdx>) {
     let entry = &scan_result.modules[entry_idx];
 
     let mut namespace_wraps: FxHashMap<ModuleIdx, NamespaceWrapInfo> = FxHashMap::default();
     // Entry-level namespace aliases: `import * as X` SymbolId → source module idx
-    let mut namespace_aliases: FxHashMap<SymbolId, ModuleIdx> = FxHashMap::default();
+    let namespace_aliases: FxHashMap<SymbolId, ModuleIdx> =
+        all_module_aliases.get(&entry_idx).cloned().unwrap_or_default();
     let mut re_exported_names: Vec<SymbolId> = Vec::new();
-
-    // Build entry-level namespace aliases from the pre-computed all_module_aliases
-    for (&(module_idx, symbol_id), &target_idx) in all_module_aliases {
-        if module_idx == entry_idx {
-            namespace_aliases.insert(symbol_id, target_idx);
-        }
-    }
 
     // Scan entry for export patterns (using stored AST)
     for stmt in &entry.program.body {
@@ -349,7 +343,8 @@ pub(super) fn pre_scan_namespace_info(
                 .scoping
                 .get_root_binding(Ident::from(exp.local.as_str()));
             if let Some(symbol_id) = symbol_key
-                && let Some(target_idx) = all_module_aliases.get(&(*module_idx, symbol_id))
+                && let Some(target_idx) =
+                    all_module_aliases.get(module_idx).and_then(|m| m.get(&symbol_id))
                 && !namespace_wraps.contains_key(target_idx)
                 && !new_wraps.iter().any(|(idx, _)| idx == target_idx)
             {
@@ -384,7 +379,8 @@ pub(super) fn pre_scan_namespace_info(
                 .scoping
                 .get_root_binding(Ident::from(exp.local.as_str()));
             if let Some(symbol_id) = symbol_key
-                && let Some(target_idx) = all_module_aliases.get(&(*module_idx, symbol_id))
+                && let Some(target_idx) =
+                    all_module_aliases.get(module_idx).and_then(|m| m.get(&symbol_id))
                 && let Some(target_wrap) = namespace_wraps.get(target_idx)
             {
                 updated_exports.push(ExportedName {

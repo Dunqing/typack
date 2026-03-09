@@ -54,8 +54,10 @@ pub fn build_link_stage_output(
     let reserved_decl_names =
         crate::generate_stage::namespace::collect_reserved_decl_names(scan_result, &rename_plan);
 
-    // Compute all_module_aliases by scanning all modules for ImportNamespaceSpecifier
-    let mut all_module_aliases: FxHashMap<(ModuleIdx, SymbolId), ModuleIdx> = FxHashMap::default();
+    // Compute all_module_aliases by scanning all modules for ImportNamespaceSpecifier.
+    // Grouped by module index for O(1) per-entry lookup.
+    let mut all_module_aliases: FxHashMap<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>> =
+        FxHashMap::default();
     for module in &scan_result.modules {
         for stmt in &module.program.body {
             if let Statement::ImportDeclaration(import_decl) = stmt
@@ -68,7 +70,10 @@ pub fn build_link_stage_output(
                             module.resolve_internal_specifier(import_decl.source.value.as_str())
                         && let Some(symbol_id) = ns.local.symbol_id.get()
                     {
-                        all_module_aliases.insert((module.idx, symbol_id), target_idx);
+                        all_module_aliases
+                            .entry(module.idx)
+                            .or_default()
+                            .insert(symbol_id, target_idx);
                     }
                 }
             }
