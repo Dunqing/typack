@@ -3,6 +3,7 @@
 
 pub mod exports;
 pub mod module_meta;
+pub mod namespace;
 mod needed_names;
 mod rename;
 pub mod resolved_exports;
@@ -14,81 +15,93 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::scan_stage::ScanResult;
+use crate::scan_stage::ScanStageOutput;
 use crate::types::ModuleIdx;
 
 pub use exports::{collect_all_exported_names, resolve_default_export_name};
 #[cfg(test)]
 pub use needed_names::build_needed_names;
 pub use needed_names::{NeededNamesCtx, build_needed_names_with_ctx, compute_entry_needed_symbols};
-pub use rename::build_rename_plan;
+use rename::build_canonical_names;
 pub use resolved_exports::build_resolved_exports;
 pub use types::NeededKindFlags;
 #[cfg(test)]
 use types::NeededNamesPlan;
 pub use types::{
-    ExportedName, LinkStageOutput, ModuleLinkMeta, NamespaceWrapInfo, PerEntryLinkData, RenamePlan,
+    CanonicalNames, ExportedName, LinkStageOutput, ModuleLinkMeta, PerEntryLinkData,
     StatementAction,
 };
 
 use warnings::collect_link_warnings;
 
-/// Build global link-stage output computed once across all entries.
-///
-/// Computes default export names, module aliases, reserved declaration names,
-/// and link warnings that are shared across all entry points.
-pub fn build_link_stage_output(
-    scan_result: &ScanResult<'_>,
-    rename_plan: RenamePlan,
-) -> LinkStageOutput {
-    // Build default_export_names for all modules
-    let mut default_export_names: FxHashMap<ModuleIdx, String> = FxHashMap::default();
-    for module in &scan_result.modules {
-        if let Some(name) = resolve_default_export_name(module.idx, scan_result) {
-            default_export_names.insert(module.idx, name);
-        }
+/// Link stage: analyzes the module graph to plan tree-shaking and name deconfliction.
+pub struct LinkStage<'a> {
+    scan_output: &'a ScanStageOutput<'a>,
+}
+
+impl<'a> LinkStage<'a> {
+    pub fn new(scan_output: &'a ScanStageOutput<'a>) -> Self {
+        Self { scan_output }
     }
 
-    // Collect link warnings
-    let mut warnings: Vec<OxcDiagnostic> = collect_link_warnings(&rename_plan, scan_result);
-    warnings.extend(build_resolved_exports(scan_result));
+    /// Run the link stage. Produces global output shared across entries.
+    ///
+    /// Computes canonical names, default export names, module aliases,
+    /// reserved declaration names, and link warnings.
+    pub fn link(&self) -> LinkStageOutput {
+        let canonical_names = build_canonical_names(self.scan_output);
 
-    // Collect reserved declaration names
-    let reserved_decl_names =
-        crate::generate_stage::namespace::collect_reserved_decl_names(scan_result, &rename_plan);
+        // Build default_export_names for all modules
+        let mut default_export_names: FxHashMap<ModuleIdx, String> = FxHashMap::default();
+        for module in &self.scan_output.module_table {
+            if let Some(name) = resolve_default_export_name(module.idx, self.scan_output) {
+                default_export_names.insert(module.idx, name);
+            }
+        }
 
-    // Compute all_module_aliases by scanning all modules for ImportNamespaceSpecifier.
-    // Grouped by module index for O(1) per-entry lookup.
-    let mut all_module_aliases: FxHashMap<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>> =
-        FxHashMap::default();
-    for module in &scan_result.modules {
-        for stmt in &module.program.body {
-            if let Statement::ImportDeclaration(import_decl) = stmt
-                && let Some(specifiers) = &import_decl.specifiers
-            {
-                for spec in specifiers {
-                    if let oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) =
-                        spec
-                        && let Some(target_idx) =
-                            module.resolve_internal_specifier(import_decl.source.value.as_str())
-                        && let Some(symbol_id) = ns.local.symbol_id.get()
-                    {
-                        all_module_aliases
-                            .entry(module.idx)
-                            .or_default()
-                            .insert(symbol_id, target_idx);
+        // Collect link warnings
+        let mut warnings: Vec<OxcDiagnostic> =
+            collect_link_warnings(&canonical_names, self.scan_output);
+        warnings.extend(build_resolved_exports(self.scan_output));
+
+        // Collect reserved declaration names
+        let reserved_decl_names =
+            namespace::collect_reserved_decl_names(self.scan_output, &canonical_names);
+
+        // Compute all_module_aliases by scanning all modules for ImportNamespaceSpecifier.
+        // Grouped by module index for O(1) per-entry lookup.
+        let mut all_module_aliases: FxHashMap<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>> =
+            FxHashMap::default();
+        for module in &self.scan_output.module_table {
+            for stmt in &self.scan_output.ast_table[module.idx].body {
+                if let Statement::ImportDeclaration(import_decl) = stmt
+                    && let Some(specifiers) = &import_decl.specifiers
+                {
+                    for spec in specifiers {
+                        if let oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(
+                            ns,
+                        ) = spec
+                            && let Some(target_idx) =
+                                module.resolve_internal_specifier(import_decl.source.value.as_str())
+                            && let Some(symbol_id) = ns.local.symbol_id.get()
+                        {
+                            all_module_aliases
+                                .entry(module.idx)
+                                .or_default()
+                                .insert(symbol_id, target_idx);
+                        }
                     }
                 }
             }
         }
-    }
 
-    LinkStageOutput {
-        rename_plan,
-        default_export_names,
-        reserved_decl_names,
-        all_module_aliases,
-        warnings,
+        LinkStageOutput {
+            canonical_names,
+            default_export_names,
+            reserved_decl_names,
+            all_module_aliases,
+            warnings,
+        }
     }
 }
 
@@ -98,17 +111,17 @@ pub fn build_link_stage_output(
 /// per-module link metadata (statement actions, import renames, etc.) that
 /// the generate stage consumes.
 pub fn build_per_entry_link_data(
-    scan_result: &ScanResult<'_>,
+    scan_result: &ScanStageOutput<'_>,
     entry_idx: ModuleIdx,
     ctx: &NeededNamesCtx,
     link_output: &LinkStageOutput,
 ) -> PerEntryLinkData {
     let mut needed_names_plan =
-        build_needed_names_with_ctx(&scan_result.modules[entry_idx], scan_result, ctx);
+        build_needed_names_with_ctx(&scan_result.module_table[entry_idx], scan_result, ctx);
 
     // Compute only the symbols the entry actually needs (exports + augmentation
     // refs + semantic deps) instead of keeping everything.
-    let entry = &scan_result.modules[entry_idx];
+    let entry = &scan_result.module_table[entry_idx];
     let (entry_needed, entry_kinds) = compute_entry_needed_symbols(entry, scan_result);
 
     let map_entry =
@@ -136,7 +149,7 @@ pub fn build_per_entry_link_data(
                 scan_result,
                 module_idx,
                 kinds.as_ref(),
-                &link_output.rename_plan,
+                &link_output.canonical_names,
                 &link_output.default_export_names,
             );
             (module_idx, meta)
@@ -145,19 +158,15 @@ pub fn build_per_entry_link_data(
 
     // Pre-compute namespace info for this entry.
     let (mut namespace_wraps, namespace_aliases) =
-        crate::generate_stage::namespace::pre_scan_namespace_info(
-            scan_result,
-            entry_idx,
-            &link_output.all_module_aliases,
-        );
-    crate::generate_stage::namespace::apply_namespace_wrap_renames(
+        namespace::pre_scan_namespace_info(scan_result, entry_idx, &link_output.all_module_aliases);
+    namespace::apply_namespace_wrap_renames(
         &mut namespace_wraps,
-        &link_output.rename_plan,
+        &link_output.canonical_names,
         scan_result,
     );
     let mut helper_reserved_names = link_output.reserved_decl_names.clone();
     let mut namespace_warnings = Vec::new();
-    crate::generate_stage::namespace::deconflict_namespace_wrap_names(
+    namespace::deconflict_namespace_wrap_names(
         &mut namespace_wraps,
         &helper_reserved_names,
         &mut namespace_warnings,
@@ -177,12 +186,12 @@ pub fn build_per_entry_link_data(
 }
 
 #[cfg(test)]
-fn build_merged_needed_names(scan_result: &ScanResult<'_>) -> NeededNamesPlan {
-    debug_assert!(!scan_result.entry_indices.is_empty());
+fn build_merged_needed_names(scan_result: &ScanStageOutput<'_>) -> NeededNamesPlan {
+    debug_assert!(!scan_result.entry_points.is_empty());
     let mut merged = NeededNamesPlan::default();
 
-    for &entry_idx in &scan_result.entry_indices {
-        let plan = build_needed_names(&scan_result.modules[entry_idx], scan_result);
+    for &entry_idx in &scan_result.entry_points {
+        let plan = build_needed_names(&scan_result.module_table[entry_idx], scan_result);
         for (module_idx, incoming) in plan.map {
             match (merged.map.remove(&module_idx), incoming) {
                 (Some(None), _) | (_, None) => {
@@ -224,8 +233,8 @@ fn build_merged_needed_names(scan_result: &ScanResult<'_>) -> NeededNamesPlan {
     // For each entry module, compute its needed symbols (exported + semantic
     // deps) and merge with any existing needed set (the entry may also appear
     // as a dependency of another entry in a multi-entry build).
-    for &entry_idx in &scan_result.entry_indices {
-        let entry = &scan_result.modules[entry_idx];
+    for &entry_idx in &scan_result.entry_points {
+        let entry = &scan_result.module_table[entry_idx];
         let (entry_needed, entry_kinds) = compute_entry_needed_symbols(entry, scan_result);
 
         let map_entry = merged.map.entry(entry_idx).or_insert_with(|| Some(FxHashSet::default()));
@@ -257,7 +266,7 @@ mod tests {
     use crate::scan_stage::ScanStage;
 
     use super::types::NeededReason;
-    use super::{RenamePlan, build_needed_names, collect_link_warnings};
+    use super::{CanonicalNames, build_needed_names, collect_link_warnings};
 
     struct TempProject {
         root: PathBuf,
@@ -286,11 +295,11 @@ mod tests {
             fs::write(path, content).expect("fixture file should be written");
         }
 
-        fn scan(&self, entry: &str) -> crate::scan_stage::ScanResult<'_> {
+        fn scan(&self, entry: &str) -> crate::scan_stage::ScanStageOutput<'_> {
             self.scan_many(&[entry])
         }
 
-        fn scan_many(&self, entries: &[&str]) -> crate::scan_stage::ScanResult<'_> {
+        fn scan_many(&self, entries: &[&str]) -> crate::scan_stage::ScanStageOutput<'_> {
             let allocator = Box::leak(Box::new(Allocator::default()));
             let options = TypackOptions {
                 input: entries
@@ -320,7 +329,7 @@ mod tests {
         project.write_file("index.d.ts", "export { C } from \"./mod\";\n");
 
         let scan_result = project.scan("index.d.ts");
-        let entry = &scan_result.modules[scan_result.entry_idx];
+        let entry = &scan_result.module_table[scan_result.entry_points[0]];
         let plan = build_needed_names(entry, &scan_result);
         let mod_idx = entry.resolve_internal_specifier("./mod").expect("mod should resolve");
 
@@ -342,10 +351,10 @@ mod tests {
         project.write_file("index.d.ts", "export { A } from \"./mid\";\n");
 
         let scan_result = project.scan("index.d.ts");
-        let entry = &scan_result.modules[scan_result.entry_idx];
+        let entry = &scan_result.module_table[scan_result.entry_points[0]];
         let plan = build_needed_names(entry, &scan_result);
         let mid_idx = entry.resolve_internal_specifier("./mid").expect("mid should resolve");
-        let mod_idx = scan_result.modules[mid_idx]
+        let mod_idx = scan_result.module_table[mid_idx]
             .resolve_internal_specifier("./mod")
             .expect("mod should resolve");
 
@@ -363,7 +372,7 @@ mod tests {
         project.write_file("index.d.ts", "export * from \"./mod\";\n");
 
         let scan_result = project.scan("index.d.ts");
-        let entry = &scan_result.modules[scan_result.entry_idx];
+        let entry = &scan_result.module_table[scan_result.entry_points[0]];
         let plan = build_needed_names(entry, &scan_result);
         let mod_idx = entry.resolve_internal_specifier("./mod").expect("mod should resolve");
         let mod_reasons = plan.reasons_for(mod_idx, "A").expect("A should have reasons in mod");
@@ -383,7 +392,7 @@ mod tests {
         );
 
         let scan_result = project.scan("index.d.ts");
-        let entry = &scan_result.modules[scan_result.entry_idx];
+        let entry = &scan_result.module_table[scan_result.entry_points[0]];
         let plan = build_needed_names(entry, &scan_result);
         let mod_idx = entry.resolve_internal_specifier("./mod").expect("mod should resolve");
 
@@ -406,7 +415,7 @@ mod tests {
         project.write_file("index.d.ts", "import Foo from \"./mod\";\nexport default Foo;\n");
 
         let scan_result = project.scan("index.d.ts");
-        let entry = &scan_result.modules[scan_result.entry_idx];
+        let entry = &scan_result.module_table[scan_result.entry_points[0]];
         let plan = build_needed_names(entry, &scan_result);
         let mod_idx = entry.resolve_internal_specifier("./mod").expect("mod should resolve");
 
@@ -423,10 +432,10 @@ mod tests {
         project.write_file("index.d.ts", "export { UsesFoo } from \"./mod\";\n");
 
         let scan_result = project.scan("index.d.ts");
-        let entry = &scan_result.modules[scan_result.entry_idx];
+        let entry = &scan_result.module_table[scan_result.entry_points[0]];
         let plan = build_needed_names(entry, &scan_result);
         let mod_idx = entry.resolve_internal_specifier("./mod").expect("mod should resolve");
-        let mod_module = &scan_result.modules[mod_idx];
+        let mod_module = &scan_result.module_table[mod_idx];
         let foo_symbol = mod_module
             .scoping
             .get_root_binding(oxc_span::Ident::from("Foo"))
@@ -455,11 +464,11 @@ mod tests {
         );
 
         let scan_result = project.scan("index.d.ts");
-        let entry = &scan_result.modules[scan_result.entry_idx];
+        let entry = &scan_result.module_table[scan_result.entry_points[0]];
         let plan = build_needed_names(entry, &scan_result);
         let mod_idx = entry.resolve_internal_specifier("./mod").expect("mod should resolve");
 
-        let mod_module = &scan_result.modules[mod_idx];
+        let mod_module = &scan_result.module_table[mod_idx];
         assert!(plan.contains_symbol(mod_module, "Shared"));
         assert!(!plan.contains_symbol(mod_module, "shared"));
     }
@@ -474,10 +483,10 @@ mod tests {
         project.write_file("index.d.ts", "export { Public } from \"./mod\";\n");
 
         let scan_result = project.scan("index.d.ts");
-        let entry = &scan_result.modules[scan_result.entry_idx];
+        let entry = &scan_result.module_table[scan_result.entry_points[0]];
         let plan = build_needed_names(entry, &scan_result);
         let mod_idx = entry.resolve_internal_specifier("./mod").expect("mod should resolve");
-        let mod_module = &scan_result.modules[mod_idx];
+        let mod_module = &scan_result.module_table[mod_idx];
 
         assert!(plan.contains_symbol(mod_module, "Internal"));
         assert!(
@@ -501,16 +510,17 @@ mod tests {
         let scan_result = project.scan_many(&["a.d.ts", "b.d.ts"]);
         let merged = super::build_merged_needed_names(&scan_result);
         let a_idx = scan_result
-            .entry_indices
+            .entry_points
             .iter()
             .copied()
-            .find(|&idx| scan_result.modules[idx].path.ends_with("a.d.ts"))
+            .find(|&idx| scan_result.module_table[idx].path.ends_with("a.d.ts"))
             .expect("a entry should exist");
-        let b_idx =
-            scan_result.modules[a_idx].resolve_internal_specifier("./b").expect("b should resolve");
+        let b_idx = scan_result.module_table[a_idx]
+            .resolve_internal_specifier("./b")
+            .expect("b should resolve");
 
         // Entry b exports both B and x; both should be in the needed set.
-        let b_module = &scan_result.modules[b_idx];
+        let b_module = &scan_result.module_table[b_idx];
         assert!(merged.contains_symbol(b_module, "B"));
         assert!(merged.contains_symbol(b_module, "x"));
     }
@@ -529,14 +539,14 @@ mod tests {
         project.write_file("index.d.ts", "export { Marker, UsesFoo } from \"./mid\";\n");
 
         let scan_result = project.scan("index.d.ts");
-        let entry = &scan_result.modules[scan_result.entry_idx];
+        let entry = &scan_result.module_table[scan_result.entry_points[0]];
         let plan = build_needed_names(entry, &scan_result);
         let mid_idx = entry.resolve_internal_specifier("./mid").expect("mid should resolve");
-        let leaf_idx = scan_result.modules[mid_idx]
+        let leaf_idx = scan_result.module_table[mid_idx]
             .resolve_internal_specifier("./leaf")
             .expect("leaf should resolve");
 
-        let leaf_module = &scan_result.modules[leaf_idx];
+        let leaf_module = &scan_result.module_table[leaf_idx];
         assert!(plan.contains_symbol(leaf_module, "Marker"));
         assert!(plan.contains_symbol(leaf_module, "Foo"));
 
@@ -562,11 +572,11 @@ mod tests {
         );
 
         let scan_result = project.scan("index.d.ts");
-        let entry = &scan_result.modules[scan_result.entry_idx];
+        let entry = &scan_result.module_table[scan_result.entry_points[0]];
         let plan = build_needed_names(entry, &scan_result);
         let leaf_idx = entry.resolve_internal_specifier("./leaf").expect("leaf should resolve");
 
-        let leaf_module = &scan_result.modules[leaf_idx];
+        let leaf_module = &scan_result.module_table[leaf_idx];
         assert!(plan.contains_symbol(leaf_module, "A"));
         assert!(plan.contains_symbol(leaf_module, "B"));
 
@@ -580,11 +590,11 @@ mod tests {
         project.write_file("index.d.ts", "export interface Foo { value: string }\n");
 
         let scan_result = project.scan("index.d.ts");
-        let mut rename_plan = RenamePlan::default();
-        rename_plan
+        let mut canonical_names = CanonicalNames::default();
+        canonical_names
             .fallback_name_renames
-            .insert((scan_result.entry_idx, "Foo".to_string()), "Foo$1".to_string());
-        let warnings = collect_link_warnings(&rename_plan, &scan_result);
+            .insert((scan_result.entry_points[0], "Foo".to_string()), "Foo$1".to_string());
+        let warnings = collect_link_warnings(&canonical_names, &scan_result);
         let text = warnings.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n");
 
         assert!(

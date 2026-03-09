@@ -1,9 +1,7 @@
-//! AST mutation passes for the generate stage.
+//! Unified AST transformation pass for the generate stage.
 //!
-//! Implements `SemanticRenamer` (applies symbol renames from the link stage) and
-//! `InlineImportAndNamespaceRewriter` (rewrites inline `import("...")` type
-//! expressions to direct type references and flattens namespace alias member
-//! accesses).
+//! `DtsFinalizer` performs semantic renaming and inline import/namespace rewriting
+//! in a single VisitMut traversal.
 
 use std::fmt::Write;
 
@@ -20,8 +18,7 @@ use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::link_stage::collect_all_exported_names;
-
-use crate::scan_stage::ScanResult;
+use crate::scan_stage::ScanStageOutput;
 use crate::types::Module;
 
 use super::namespace::{get_or_create_ns_name, sanitize_to_identifier};
@@ -41,58 +38,25 @@ pub(super) fn ensure_declare_on_declaration(decl: &mut Declaration<'_>) {
     }
 }
 
-pub(super) struct SemanticRenamer<'a, 's> {
+pub(super) struct DtsFinalizer<'a, 's> {
+    pub ast: AstBuilder<'a>,
     pub allocator: &'a oxc_allocator::Allocator,
     pub scoping: &'s Scoping,
-    pub renamed_symbols: &'s FxHashMap<oxc_syntax::symbol::SymbolId, String>,
-}
-
-impl<'a, 's> SemanticRenamer<'a, 's> {
-    pub fn new(
-        allocator: &'a oxc_allocator::Allocator,
-        scoping: &'s Scoping,
-        renamed_symbols: &'s FxHashMap<oxc_syntax::symbol::SymbolId, String>,
-    ) -> Self {
-        Self { allocator, scoping, renamed_symbols }
-    }
-}
-
-impl<'a> VisitMut<'a> for SemanticRenamer<'a, '_> {
-    fn visit_binding_identifier(&mut self, ident: &mut oxc_ast::ast::BindingIdentifier<'a>) {
-        if let Some(symbol_id) = ident.symbol_id.get()
-            && let Some(new_name) = self.renamed_symbols.get(&symbol_id)
-        {
-            ident.name = Ident::from_in(new_name.as_str(), self.allocator);
-        }
-    }
-
-    fn visit_identifier_reference(&mut self, ident: &mut oxc_ast::ast::IdentifierReference<'a>) {
-        if let Some(ref_id) = ident.reference_id.get()
-            && let Some(symbol_id) = self.scoping.get_reference(ref_id).symbol_id()
-            && let Some(new_name) = self.renamed_symbols.get(&symbol_id)
-        {
-            ident.name = Ident::from_in(new_name.as_str(), self.allocator);
-        }
-    }
-}
-
-pub(super) struct InlineImportAndNamespaceRewriter<'a, 's> {
-    pub ast: AstBuilder<'a>,
+    pub renamed_symbols: &'s FxHashMap<SymbolId, String>,
+    // InlineImportAndNamespaceRewriter fields:
     pub module: &'s Module<'a>,
     pub imports: &'s mut Vec<ExternalImport>,
     pub ns_name_map: &'s mut FxHashMap<String, String>,
-    pub scan_result: &'s ScanResult<'a>,
+    pub scan_result: &'s ScanStageOutput<'a>,
     pub ns_wrapper_output: &'s mut String,
     pub namespace_aliases: FxHashSet<SymbolId>,
-    /// Map: external ns SymbolId → (source specifier, local name)
     pub external_ns_info: &'s FxHashMap<SymbolId, (String, String)>,
-    /// Tracks which members are accessed per external specifier (built during visit).
     pub external_ns_members: FxHashMap<String, FxHashSet<String>>,
     pub helper_reserved_names: &'s FxHashSet<String>,
     pub warnings: &'s mut Vec<OxcDiagnostic>,
 }
 
-impl<'a> InlineImportAndNamespaceRewriter<'a, '_> {
+impl<'a> DtsFinalizer<'a, '_> {
     fn ensure_external_namespace_import(&mut self, specifier: &str) -> String {
         if let Some(existing_name) = self
             .imports
@@ -139,7 +103,7 @@ impl<'a> InlineImportAndNamespaceRewriter<'a, '_> {
             self.warnings,
             |spec| {
                 if let Some(source_module_idx) = self.module.resolve_internal_specifier(spec) {
-                    let stem = self.scan_result.modules[source_module_idx]
+                    let stem = self.scan_result.module_table[source_module_idx]
                         .path
                         .file_stem()
                         .unwrap_or_default()
@@ -235,22 +199,40 @@ impl<'a> InlineImportAndNamespaceRewriter<'a, '_> {
     }
 }
 
-impl<'a> VisitMut<'a> for InlineImportAndNamespaceRewriter<'a, '_> {
+impl<'a> VisitMut<'a> for DtsFinalizer<'a, '_> {
+    // --- SemanticRenamer logic ---
+
+    fn visit_binding_identifier(&mut self, ident: &mut oxc_ast::ast::BindingIdentifier<'a>) {
+        if let Some(symbol_id) = ident.symbol_id.get()
+            && let Some(new_name) = self.renamed_symbols.get(&symbol_id)
+        {
+            ident.name = Ident::from_in(new_name.as_str(), self.allocator);
+        }
+    }
+
+    fn visit_identifier_reference(&mut self, ident: &mut oxc_ast::ast::IdentifierReference<'a>) {
+        if let Some(ref_id) = ident.reference_id.get()
+            && let Some(symbol_id) = self.scoping.get_reference(ref_id).symbol_id()
+            && let Some(new_name) = self.renamed_symbols.get(&symbol_id)
+        {
+            ident.name = Ident::from_in(new_name.as_str(), self.allocator);
+        }
+    }
+
+    // --- InlineImportAndNamespaceRewriter logic ---
+
     fn visit_ts_type_name(&mut self, it: &mut TSTypeName<'a>) {
         // Record external namespace member access before stripping
         if let Some((root_symbol, member_name)) =
-            extract_ns_member_access_type_name(it, &self.module.scoping)
+            extract_ns_member_access_type_name(it, self.scoping)
             && let Some((specifier, _)) = self.external_ns_info.get(&root_symbol)
         {
             self.external_ns_members.entry(specifier.clone()).or_default().insert(member_name);
         }
 
-        if let Some(rewritten) = strip_namespace_alias_type_name(
-            self.ast,
-            it,
-            &self.namespace_aliases,
-            &self.module.scoping,
-        ) {
+        if let Some(rewritten) =
+            strip_namespace_alias_type_name(self.ast, it, &self.namespace_aliases, self.scoping)
+        {
             *it = rewritten;
         }
         walk_mut::walk_ts_type_name(self, it);
@@ -259,18 +241,15 @@ impl<'a> VisitMut<'a> for InlineImportAndNamespaceRewriter<'a, '_> {
     fn visit_expression(&mut self, it: &mut Expression<'a>) {
         // Record external namespace member access before stripping
         if let Some((root_symbol, member_name)) =
-            extract_ns_member_access_expression(it, &self.module.scoping)
+            extract_ns_member_access_expression(it, self.scoping)
             && let Some((specifier, _)) = self.external_ns_info.get(&root_symbol)
         {
             self.external_ns_members.entry(specifier.clone()).or_default().insert(member_name);
         }
 
-        if let Some(rewritten) = strip_namespace_alias_expression(
-            self.ast,
-            it,
-            &self.namespace_aliases,
-            &self.module.scoping,
-        ) {
+        if let Some(rewritten) =
+            strip_namespace_alias_expression(self.ast, it, &self.namespace_aliases, self.scoping)
+        {
             *it = rewritten;
             walk_mut::walk_expression(self, it);
             return;

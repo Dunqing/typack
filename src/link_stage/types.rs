@@ -4,7 +4,7 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_syntax::symbol::{SymbolFlags, SymbolId};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::types::{Module, ModuleIdx};
+use crate::types::{Module, ModuleIdx, SymbolRef};
 
 /// What to do with each statement during the transform phase.
 pub enum StatementAction {
@@ -52,17 +52,17 @@ pub struct NamespaceWrapInfo {
     pub export_names: Vec<ExportedName>,
 }
 
-/// Rename plan for resolving name conflicts across bundled modules.
+/// Canonical name mappings for resolving name conflicts across bundled modules.
 ///
-/// When multiple modules declare names that collide, the link stage builds a rename
-/// plan mapping old names to conflict-free alternatives (e.g. `Foo` → `Foo$1`).
+/// When multiple modules declare names that collide, the link stage builds canonical
+/// name mappings from old names to conflict-free alternatives (e.g. `Foo` → `Foo$1`).
 #[derive(Default, Clone)]
-pub struct RenamePlan {
-    /// Renames keyed by (module, symbol). Uses `SymbolId` for precise renaming
+pub struct CanonicalNames {
+    /// Symbol-based renames. Uses `SymbolRef` for precise renaming
     /// that respects scoping and avoids false matches.
-    pub symbol_renames: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
-    /// Renames keyed by name string (fallback). Used when a name couldn't be
-    /// resolved to a semantic symbol (e.g. names from declaration merging).
+    pub symbols: FxHashMap<SymbolRef, String>,
+    /// Fallback name renames for when symbol resolution isn't possible
+    /// (e.g. names from declaration merging).
     pub fallback_name_renames: FxHashMap<(ModuleIdx, String), String>,
     /// Names already claimed in the output scope. Used during rename planning
     /// to detect collisions and allocate `$N` suffixes.
@@ -159,7 +159,7 @@ impl NeededNamesPlan {
 
 /// Global link-stage output computed once across all entries.
 pub struct LinkStageOutput {
-    pub rename_plan: RenamePlan,
+    pub canonical_names: CanonicalNames,
     pub default_export_names: FxHashMap<ModuleIdx, String>,
     pub reserved_decl_names: FxHashSet<String>,
     pub all_module_aliases: FxHashMap<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>>,
@@ -182,36 +182,37 @@ pub struct PerEntryLinkData {
     pub namespace_warnings: Vec<OxcDiagnostic>,
 }
 
-impl RenamePlan {
-    pub fn resolve_symbol(&self, module_idx: ModuleIdx, symbol_id: SymbolId) -> Option<&str> {
-        self.symbol_renames.get(&module_idx)?.get(&symbol_id).map(String::as_str)
+impl CanonicalNames {
+    pub fn resolve_symbol(&self, symbol_ref: SymbolRef) -> Option<&str> {
+        self.symbols.get(&symbol_ref).map(String::as_str)
     }
 
     pub fn resolve_name(&self, module: &Module<'_>, name: &str) -> Option<&str> {
         module
             .scoping
             .get_root_binding(oxc_span::Ident::from(name))
-            .and_then(|symbol_id| self.resolve_symbol(module.idx, symbol_id))
+            .and_then(|symbol_id| self.resolve_symbol(SymbolRef::from((module.idx, symbol_id))))
             .or_else(|| {
                 self.fallback_name_renames.get(&(module.idx, name.to_string())).map(String::as_str)
             })
     }
 
     /// Get all symbol renames for a specific module.
-    pub fn module_symbol_renames(
-        &self,
-        module_idx: ModuleIdx,
-    ) -> Option<&FxHashMap<SymbolId, String>> {
-        self.symbol_renames.get(&module_idx)
+    pub fn module_symbol_renames(&self, module_idx: ModuleIdx) -> FxHashMap<SymbolId, String> {
+        self.symbols
+            .iter()
+            .filter(|(sr, _)| sr.owner == module_idx)
+            .map(|(sr, name)| (sr.symbol, name.clone()))
+            .collect()
     }
 
-    /// Insert a symbol rename for a specific module.
+    /// Insert a symbol rename.
     pub fn insert_symbol_rename(
         &mut self,
         module_idx: ModuleIdx,
         symbol_id: SymbolId,
         new_name: String,
     ) {
-        self.symbol_renames.entry(module_idx).or_default().insert(symbol_id, new_name);
+        self.symbols.insert(SymbolRef::from((module_idx, symbol_id)), new_name);
     }
 }

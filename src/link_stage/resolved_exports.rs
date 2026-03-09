@@ -6,7 +6,7 @@
 use oxc_diagnostics::OxcDiagnostic;
 use rustc_hash::FxHashMap;
 
-use crate::scan_stage::ScanResult;
+use crate::scan_stage::ScanStageOutput;
 use crate::types::{ExportSource, ModuleIdx};
 
 /// The resolved origin of an exported name.
@@ -28,14 +28,14 @@ type ModuleResolvedExports = FxHashMap<String, ResolvedExport>;
 /// For each module, follows re-export chains (`export { X } from` and `export * from`)
 /// to determine where each exported name ultimately comes from. Detects ambiguity
 /// when multiple `export *` sources provide the same name.
-pub fn build_resolved_exports(scan_result: &ScanResult<'_>) -> Vec<OxcDiagnostic> {
+pub fn build_resolved_exports(scan_result: &ScanStageOutput<'_>) -> Vec<OxcDiagnostic> {
     let mut resolved: FxHashMap<ModuleIdx, ModuleResolvedExports> = FxHashMap::default();
     let mut warnings: Vec<OxcDiagnostic> = Vec::new();
 
     // Process modules in topological order (dependencies before dependents).
     // This ensures that when we resolve a re-export chain, the source module's
     // resolved exports are already available.
-    for module in &scan_result.modules {
+    for module in &scan_result.module_table {
         let info = &module.export_import_info;
         let mut module_resolved: ModuleResolvedExports = FxHashMap::default();
 
@@ -129,8 +129,8 @@ pub fn build_resolved_exports(scan_result: &ScanResult<'_>) -> Vec<OxcDiagnostic
                     }
                     warnings.push(OxcDiagnostic::warn(format!(
                         "Ambiguous star export: \"{name}\" is provided by both module {} and module {} via `export *`",
-                        scan_result.modules[prev_source].relative_path,
-                        scan_result.modules[target_idx].relative_path,
+                        scan_result.module_table[prev_source].relative_path,
+                        scan_result.module_table[target_idx].relative_path,
                     )).with_help(format!(
                         "Add an explicit `export {{ {name} }} from \"...\"` to resolve the ambiguity",
                     )));

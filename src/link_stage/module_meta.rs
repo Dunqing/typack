@@ -13,10 +13,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::helpers::collect_decl_names;
 use crate::link_stage::NeededKindFlags;
 use crate::link_stage::exports::resolve_export_local_name;
-use crate::scan_stage::ScanResult;
+use crate::scan_stage::ScanStageOutput;
 use crate::types::ModuleIdx;
 
-use super::types::{ModuleLinkMeta, RenamePlan, StatementAction};
+use super::types::{CanonicalNames, ModuleLinkMeta, StatementAction};
 
 /// Compute per-module link metadata for a single module.
 ///
@@ -24,15 +24,16 @@ use super::types::{ModuleLinkMeta, RenamePlan, StatementAction};
 /// rename info, namespace aliases, and external namespace info. This is pure
 /// link-stage data — no generate-stage dependency.
 pub fn compute_module_link_meta(
-    scan_result: &ScanResult,
+    scan_result: &ScanStageOutput,
     module_idx: ModuleIdx,
     needed_symbol_kinds: Option<&FxHashMap<SymbolId, NeededKindFlags>>,
-    rename_plan: &RenamePlan,
+    canonical_names: &CanonicalNames,
     default_export_names: &FxHashMap<ModuleIdx, String>,
 ) -> ModuleLinkMeta {
-    let module = &scan_result.modules[module_idx];
+    let module = &scan_result.module_table[module_idx];
+    let program_body = &scan_result.ast_table[module_idx].body;
     let mut meta = ModuleLinkMeta {
-        statement_actions: Vec::with_capacity(module.program.body.len()),
+        statement_actions: Vec::with_capacity(program_body.len()),
         import_renames: FxHashMap::default(),
         ns_aliases: FxHashSet::default(),
         external_ns_info: FxHashMap::default(),
@@ -41,7 +42,7 @@ pub fn compute_module_link_meta(
 
     // Pre-scan: collect import renames, ns aliases, external ns info,
     // and reexported import names.
-    for stmt in &module.program.body {
+    for stmt in program_body {
         // Collect local names from `export { X }` (no source) for non-entry
         // modules. When X was imported from an external package, the import
         // must be preserved even though X isn't used in local declarations.
@@ -61,7 +62,7 @@ pub fn compute_module_link_meta(
                 module.resolve_internal_specifier(import_decl.source.value.as_str())
             {
                 // Internal import processing
-                let source_module = &scan_result.modules[source_idx];
+                let source_module = &scan_result.module_table[source_idx];
                 for spec in specifiers {
                     match spec {
                         oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) => {
@@ -74,7 +75,7 @@ pub fn compute_module_link_meta(
                             let local_name =
                                 resolve_export_local_name(source_module, &imported_alias)
                                     .unwrap_or(imported_alias);
-                            let resolved_imported = rename_plan
+                            let resolved_imported = canonical_names
                                 .resolve_name(source_module, &local_name)
                                 .map_or(local_name, ToString::to_string);
                             if s.local.name.as_str() != resolved_imported
@@ -88,7 +89,7 @@ pub fn compute_module_link_meta(
                                 default_export_names.get(&source_module.idx).cloned()
                             {
                                 if let Some(renamed) =
-                                    rename_plan.resolve_name(source_module, &actual_name)
+                                    canonical_names.resolve_name(source_module, &actual_name)
                                 {
                                     actual_name = renamed.to_string();
                                 }
@@ -120,7 +121,7 @@ pub fn compute_module_link_meta(
     }
 
     // Determine per-statement actions.
-    for stmt in &module.program.body {
+    for stmt in program_body {
         let action = analyze_statement(stmt, module, needed_symbol_kinds);
         meta.statement_actions.push(action);
     }
