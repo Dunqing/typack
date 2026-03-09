@@ -82,12 +82,10 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             self.pre_apply_global_renames();
         }
 
-        self.scan_result
-            .entry_points
-            .clone()
-            .iter()
-            .map(|&entry_idx| self.generate_entry(entry_idx, single_entry))
-            .collect()
+        // Clone entry points upfront so we don't hold a borrow on
+        // self.scan_result, which generate_entry needs mutably.
+        let entry_points = self.scan_result.entry_points.clone();
+        entry_points.iter().map(|&entry_idx| self.generate_entry(entry_idx, single_entry)).collect()
     }
 
     /// Pre-apply canonical name renames and import renames permanently to all

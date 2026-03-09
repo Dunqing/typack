@@ -4,7 +4,7 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_syntax::symbol::{SymbolFlags, SymbolId};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::types::{Module, ModuleIdx, SymbolRef};
+use crate::types::{Module, ModuleIdx};
 
 /// What to do with each statement during the transform phase.
 pub enum StatementAction {
@@ -95,19 +95,14 @@ pub struct NamespaceWrapInfo {
 /// name mappings from old names to conflict-free alternatives (e.g. `Foo` → `Foo$1`).
 #[derive(Default, Clone)]
 pub struct CanonicalNames {
-    /// Symbol-based renames. Uses `SymbolRef` for precise renaming
-    /// that respects scoping and avoids false matches.
-    pub symbols: FxHashMap<SymbolRef, String>,
+    /// Symbol-based renames grouped by module for O(1) per-module lookup.
+    per_module_symbols: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
     /// Fallback name renames for when symbol resolution isn't possible
     /// (e.g. names from declaration merging).
     pub fallback_name_renames: FxHashMap<(ModuleIdx, String), String>,
     /// Names already claimed in the output scope. Used during rename planning
     /// to detect collisions and allocate `$N` suffixes.
     pub used_names: FxHashSet<String>,
-    /// Pre-grouped index of `symbols` by module. Built once via
-    /// `build_per_module_index` after all renames are inserted so that
-    /// `module_symbol_renames` is O(1) instead of O(total_renames).
-    per_module_symbols: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
@@ -224,28 +219,18 @@ pub struct PerEntryLinkData {
 }
 
 impl CanonicalNames {
-    pub fn resolve_symbol(&self, symbol_ref: SymbolRef) -> Option<&str> {
-        self.symbols.get(&symbol_ref).map(String::as_str)
+    pub fn resolve_symbol(&self, module_idx: ModuleIdx, symbol_id: SymbolId) -> Option<&str> {
+        self.per_module_symbols.get(&module_idx)?.get(&symbol_id).map(String::as_str)
     }
 
     pub fn resolve_name(&self, module: &Module<'_>, name: &str) -> Option<&str> {
         module
             .scoping
             .get_root_binding(oxc_span::Ident::from(name))
-            .and_then(|symbol_id| self.resolve_symbol(SymbolRef::from((module.idx, symbol_id))))
+            .and_then(|symbol_id| self.resolve_symbol(module.idx, symbol_id))
             .or_else(|| {
                 self.fallback_name_renames.get(&(module.idx, name.to_string())).map(String::as_str)
             })
-    }
-
-    /// Build the per-module index from `self.symbols`.
-    /// Call once after all renames have been inserted.
-    pub fn build_per_module_index(&mut self) {
-        let mut index: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>> = FxHashMap::default();
-        for (sr, name) in &self.symbols {
-            index.entry(sr.owner).or_default().insert(sr.symbol, name.clone());
-        }
-        self.per_module_symbols = index;
     }
 
     /// Get all symbol renames for a specific module (O(1) lookup).
@@ -256,18 +241,13 @@ impl CanonicalNames {
         self.per_module_symbols.get(&module_idx)
     }
 
-    /// Insert a symbol rename.
-    ///
-    /// Also updates the `per_module_symbols` cache if it has been built.
+    /// Insert a symbol rename for a specific module.
     pub fn insert_symbol_rename(
         &mut self,
         module_idx: ModuleIdx,
         symbol_id: SymbolId,
         new_name: String,
     ) {
-        self.symbols.insert(SymbolRef::from((module_idx, symbol_id)), new_name.clone());
-        if !self.per_module_symbols.is_empty() {
-            self.per_module_symbols.entry(module_idx).or_default().insert(symbol_id, new_name);
-        }
+        self.per_module_symbols.entry(module_idx).or_default().insert(symbol_id, new_name);
     }
 }
