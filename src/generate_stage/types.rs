@@ -3,40 +3,9 @@
 use oxc_diagnostics::OxcDiagnostic;
 use rustc_hash::FxHashMap;
 
-pub(super) use crate::link_stage::ExportedName;
-
-/// An import specifier collected from an external import.
-pub struct ImportSpecifier {
-    pub local: String,
-    pub kind: ImportSpecifierKind,
-}
-
-pub enum ImportSpecifierKind {
-    Namespace,
-    Default,
-    Named(String),
-}
-
-impl ImportSpecifierKind {
-    pub fn sort_key(&self) -> &str {
-        match self {
-            Self::Namespace => "*",
-            Self::Default => "default",
-            Self::Named(name) => name.as_str(),
-        }
-    }
-}
-
-/// An external import to be preserved in the output.
-pub struct ExternalImport {
-    pub source: String,
-    pub specifiers: Vec<ImportSpecifier>,
-    pub is_type_only: bool,
-    pub side_effect_only: bool,
-    /// When `true`, this import was created from an `export { ... } from "external"`
-    /// re-export and should not be pruned by the per-module tree-shaking filter.
-    pub from_reexport: bool,
-}
+pub(super) use crate::link_stage::{
+    ExportedName, ExternalImport, ImportSpecifier, ImportSpecifierKind,
+};
 
 /// An `export * from "mod"` to be preserved in the output.
 pub(super) struct ExternalStarExport {

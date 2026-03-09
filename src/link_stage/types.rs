@@ -38,6 +38,39 @@ pub struct ModuleLinkMeta {
     pub needs_structural_mutation: bool,
 }
 
+/// An import specifier collected from an external import.
+pub struct ImportSpecifier {
+    pub local: String,
+    pub kind: ImportSpecifierKind,
+}
+
+pub enum ImportSpecifierKind {
+    Namespace,
+    Default,
+    Named(String),
+}
+
+impl ImportSpecifierKind {
+    pub fn sort_key(&self) -> &str {
+        match self {
+            Self::Namespace => "*",
+            Self::Default => "default",
+            Self::Named(name) => name.as_str(),
+        }
+    }
+}
+
+/// An external import to be preserved in the output.
+pub struct ExternalImport {
+    pub source: String,
+    pub specifiers: Vec<ImportSpecifier>,
+    pub is_type_only: bool,
+    pub side_effect_only: bool,
+    /// When `true`, this import was created from an `export { ... } from "external"`
+    /// re-export and should not be pruned by the per-module tree-shaking filter.
+    pub from_reexport: bool,
+}
+
 /// An exported name with optional rename info.
 pub struct ExportedName {
     /// The local name (used in the declaration).
@@ -224,12 +257,17 @@ impl CanonicalNames {
     }
 
     /// Insert a symbol rename.
+    ///
+    /// Also updates the `per_module_symbols` cache if it has been built.
     pub fn insert_symbol_rename(
         &mut self,
         module_idx: ModuleIdx,
         symbol_id: SymbolId,
         new_name: String,
     ) {
-        self.symbols.insert(SymbolRef::from((module_idx, symbol_id)), new_name);
+        self.symbols.insert(SymbolRef::from((module_idx, symbol_id)), new_name.clone());
+        if !self.per_module_symbols.is_empty() {
+            self.per_module_symbols.entry(module_idx).or_default().insert(symbol_id, new_name);
+        }
     }
 }

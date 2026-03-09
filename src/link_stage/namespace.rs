@@ -13,7 +13,7 @@ use oxc_span::Ident;
 use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::generate_stage::types::{ExternalImport, ImportSpecifier, ImportSpecifierKind};
+use super::types::{ExternalImport, ImportSpecifier, ImportSpecifierKind};
 use crate::helpers::collect_decl_names;
 use crate::scan_stage::ScanStageOutput;
 use crate::types::ModuleIdx;
@@ -41,6 +41,11 @@ pub fn collect_declaration_names(decl: &Declaration<'_>, exports: &mut Vec<Expor
     }
 }
 
+/// Collect a single export specifier into the export list.
+///
+/// Pushes an `ExportedName` with the specifier's local and exported names.
+/// The `is_type_only` flag is propagated from the parent `export` declaration
+/// or the individual specifier's `export type` modifier.
 pub fn collect_export_specifier(
     spec: &ExportSpecifier<'_>,
     exports: &mut Vec<ExportedName>,
@@ -160,6 +165,12 @@ pub fn collect_module_exports(
     }
 }
 
+/// Apply canonical name renames to namespace wrapper export lists.
+///
+/// Called after canonical names are finalized. Updates the `local` names in
+/// each wrapper's export list to use their post-rename canonical names, so
+/// the emitted `declare namespace { export { ... } }` block references the
+/// correct names in the bundled output.
 pub fn apply_namespace_wrap_renames(
     namespace_wraps: &mut FxHashMap<ModuleIdx, NamespaceWrapInfo>,
     canonical_names: &CanonicalNames,
@@ -175,6 +186,9 @@ pub fn apply_namespace_wrap_renames(
     }
 }
 
+/// Collect all declaration names across all modules, resolved to their
+/// canonical (post-rename) names. Used to reserve names that namespace
+/// wrappers must not collide with.
 pub fn collect_reserved_decl_names(
     scan_result: &ScanStageOutput<'_>,
     canonical_names: &CanonicalNames,
@@ -228,6 +242,11 @@ pub fn collect_reserved_decl_names(
     names
 }
 
+/// Deconflict namespace wrapper names against reserved declaration names.
+///
+/// If a wrapper name collides with an existing declaration, appends `$1`,
+/// `$2`, etc. suffixes until a unique name is found. Emits a diagnostic
+/// warning for each rename.
 pub fn deconflict_namespace_wrap_names(
     namespace_wraps: &mut FxHashMap<ModuleIdx, NamespaceWrapInfo>,
     reserved_names: &FxHashSet<String>,

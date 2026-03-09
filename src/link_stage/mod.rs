@@ -28,8 +28,8 @@ pub use types::NeededKindFlags;
 #[cfg(test)]
 use types::NeededNamesPlan;
 pub use types::{
-    CanonicalNames, ExportedName, LinkStageOutput, ModuleLinkMeta, PerEntryLinkData,
-    StatementAction,
+    CanonicalNames, ExportedName, ExternalImport, ImportSpecifier, ImportSpecifierKind,
+    LinkStageOutput, ModuleLinkMeta, PerEntryLinkData, StatementAction,
 };
 
 use warnings::collect_link_warnings;

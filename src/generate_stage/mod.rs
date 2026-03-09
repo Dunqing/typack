@@ -231,20 +231,23 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         }
 
         // Emit namespace-wrapped modules first, then regular modules.
-        for module in module_outputs.iter().filter(|m| m.is_ns_wrapped) {
-            if let Some(wrapper) = &module.namespace_wrapper {
-                joiner.append_raw(wrapper.clone());
+        // Consume module_outputs by value to avoid cloning code/map strings.
+        let (ns_wrapped, regular): (Vec<_>, Vec<_>) =
+            module_outputs.into_iter().partition(|m| m.is_ns_wrapped);
+        for module in ns_wrapped {
+            if let Some(wrapper) = module.namespace_wrapper {
+                joiner.append_raw(wrapper);
             }
             if !module.code.is_empty() {
-                joiner.append_mapped(module.code.clone(), module.map.clone());
+                joiner.append_mapped(module.code, module.map);
             }
         }
-        for module in module_outputs.iter().filter(|m| !m.is_ns_wrapped) {
+        for module in regular {
             if module.code.is_empty() {
                 continue;
             }
             joiner.append_raw(format!("//#region {}\n", module.relative_path));
-            joiner.append_mapped(module.code.clone(), module.map.clone());
+            joiner.append_mapped(module.code, module.map);
             joiner.append_raw("//#endregion\n");
         }
 

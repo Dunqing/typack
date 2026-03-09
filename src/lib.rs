@@ -80,6 +80,12 @@ impl<'a> Bundle<'a> {
     /// AST statements (via `TakeIn`) to avoid cloning. This means `generate`
     /// can only be called once.
     pub fn generate(&mut self, options: &TypackOptions) -> BundleResult {
+        debug_assert_eq!(
+            options.input.len(),
+            self.scan_output.entry_points.len(),
+            "options.input length must match the entries used in Bundle::new"
+        );
+
         let mut all_warnings: Vec<OxcDiagnostic> = self.scan_output.warnings.clone();
         all_warnings.extend(self.link_output.warnings.iter().cloned());
 
