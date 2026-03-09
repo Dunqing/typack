@@ -18,11 +18,11 @@ use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
 use oxc_allocator::{Allocator, TakeIn};
-use oxc_ast::AstBuilder;
 use oxc_ast::ast::{
     Declaration, ExportDefaultDeclarationKind, IdentifierReference, Statement, TSTypeName,
     TSTypeQuery,
 };
+use oxc_ast::{AstBuilder, NONE};
 use oxc_ast_visit::{Visit, VisitMut};
 use oxc_codegen::{Codegen, CodegenOptions, IndentChar};
 use oxc_diagnostics::OxcDiagnostic;
@@ -510,9 +510,9 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                                 span,
                                 Some(decl),
                                 ast.vec(),
-                                None::<oxc_ast::ast::StringLiteral<'a>>,
+                                None,
                                 oxc_ast::ast::ImportOrExportKind::Value,
-                                None::<oxc_ast::ast::WithClause<'a>>,
+                                NONE,
                             ))
                         }
                     }
