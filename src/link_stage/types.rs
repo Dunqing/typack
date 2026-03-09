@@ -10,11 +10,11 @@ use crate::types::{Module, ModuleIdx};
 pub enum StatementAction {
     /// Skip this statement entirely (tree-shaken, consumed as metadata, or internal import).
     Skip,
-    /// Clone this statement as-is and include in output.
+    /// Move this statement as-is and include in output.
     Include,
-    /// Clone the inner declaration from an `export named`, add `declare`, adjust span.
+    /// Move the inner declaration from an `export named`, add `declare`, adjust span.
     UnwrapExportDeclaration,
-    /// Clone the inner declaration from an `export default`, convert to named declaration.
+    /// Move the inner declaration from an `export default`, convert to named declaration.
     UnwrapExportDefault,
 }
 

@@ -57,9 +57,6 @@ pub fn compute_module_link_meta(
         if let Statement::ImportDeclaration(import_decl) = stmt
             && let Some(specifiers) = &import_decl.specifiers
         {
-            let is_internal =
-                module.resolve_internal_specifier(import_decl.source.value.as_str()).is_some();
-
             if let Some(source_idx) =
                 module.resolve_internal_specifier(import_decl.source.value.as_str())
             {
@@ -104,7 +101,7 @@ pub fn compute_module_link_meta(
                         }
                     }
                 }
-            } else if !is_internal {
+            } else {
                 // External import — collect namespace specifiers
                 for spec in specifiers {
                     if let oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) =
@@ -124,7 +121,7 @@ pub fn compute_module_link_meta(
 
     // Determine per-statement actions.
     for stmt in &module.program.body {
-        let action = analyze_statement(scan_result, stmt, module, needed_symbol_kinds);
+        let action = analyze_statement(stmt, module, needed_symbol_kinds);
         meta.statement_actions.push(action);
     }
 
@@ -137,7 +134,6 @@ pub fn compute_module_link_meta(
 /// on needed symbols and module structure, but does NOT collect exports/imports
 /// into GenerateAcc (that happens in generate stage's `collect_module_outputs`).
 fn analyze_statement<'a>(
-    _scan_result: &ScanResult,
     stmt: &Statement<'a>,
     module: &crate::types::Module<'a>,
     needed_symbol_kinds: Option<&FxHashMap<SymbolId, NeededKindFlags>>,
