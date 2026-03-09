@@ -49,7 +49,8 @@ impl<'a> LinkStage<'a> {
     /// Computes canonical names, default export names, module aliases,
     /// reserved declaration names, and link warnings.
     pub fn link(&self) -> LinkStageOutput {
-        let canonical_names = build_canonical_names(self.scan_output);
+        let mut canonical_names = build_canonical_names(self.scan_output);
+        canonical_names.build_per_module_index();
 
         // Build default_export_names for all modules
         let mut default_export_names: FxHashMap<ModuleIdx, String> = FxHashMap::default();

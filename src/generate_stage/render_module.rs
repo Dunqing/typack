@@ -383,7 +383,8 @@ pub(super) fn build_merged_renames(
     module_idx: ModuleIdx,
     import_renames: &FxHashMap<SymbolId, String>,
 ) -> FxHashMap<SymbolId, String> {
-    let mut renamed_symbols = canonical_names.module_symbol_renames(module_idx);
+    let mut renamed_symbols =
+        canonical_names.module_symbol_renames(module_idx).cloned().unwrap_or_default();
     renamed_symbols.extend(import_renames.iter().map(|(k, v)| (*k, v.clone())));
     renamed_symbols
 }

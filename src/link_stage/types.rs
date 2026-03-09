@@ -71,6 +71,10 @@ pub struct CanonicalNames {
     /// Names already claimed in the output scope. Used during rename planning
     /// to detect collisions and allocate `$N` suffixes.
     pub used_names: FxHashSet<String>,
+    /// Pre-grouped index of `symbols` by module. Built once via
+    /// `build_per_module_index` after all renames are inserted so that
+    /// `module_symbol_renames` is O(1) instead of O(total_renames).
+    per_module_symbols: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
@@ -201,13 +205,22 @@ impl CanonicalNames {
             })
     }
 
-    /// Get all symbol renames for a specific module.
-    pub fn module_symbol_renames(&self, module_idx: ModuleIdx) -> FxHashMap<SymbolId, String> {
-        self.symbols
-            .iter()
-            .filter(|(sr, _)| sr.owner == module_idx)
-            .map(|(sr, name)| (sr.symbol, name.clone()))
-            .collect()
+    /// Build the per-module index from `self.symbols`.
+    /// Call once after all renames have been inserted.
+    pub fn build_per_module_index(&mut self) {
+        let mut index: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>> = FxHashMap::default();
+        for (sr, name) in &self.symbols {
+            index.entry(sr.owner).or_default().insert(sr.symbol, name.clone());
+        }
+        self.per_module_symbols = index;
+    }
+
+    /// Get all symbol renames for a specific module (O(1) lookup).
+    pub fn module_symbol_renames(
+        &self,
+        module_idx: ModuleIdx,
+    ) -> Option<&FxHashMap<SymbolId, String>> {
+        self.per_module_symbols.get(&module_idx)
     }
 
     /// Insert a symbol rename.

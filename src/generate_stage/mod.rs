@@ -101,17 +101,19 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             let module_idx = ModuleIdx::from_usize(module_idx_usize);
             let module = &self.scan_result.module_table[module_idx];
 
-            // Compute merged renames for this module (same computation as in render_module).
-            let import_renames = compute_import_renames(
+            // Reuse link stage's compute_module_link_meta to get import_renames,
+            // avoiding duplicated import rename logic.
+            let meta = crate::link_stage::module_meta::compute_module_link_meta(
                 self.scan_result,
                 module_idx,
+                None,
                 &self.link_output.canonical_names,
                 &self.link_output.default_export_names,
             );
             let merged_renames = render_module::build_merged_renames(
                 &self.link_output.canonical_names,
                 module_idx,
-                &import_renames,
+                &meta.import_renames,
             );
             if merged_renames.is_empty() {
                 continue;
@@ -283,67 +285,4 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         }
         None
     }
-}
-
-/// Compute import renames for a module without computing the full link meta.
-/// This extracts just the import rename logic from `compute_module_link_meta`,
-/// used during pre-rename application in multi-entry mode.
-fn compute_import_renames(
-    scan_result: &ScanStageOutput,
-    module_idx: ModuleIdx,
-    canonical_names: &crate::link_stage::CanonicalNames,
-    default_export_names: &rustc_hash::FxHashMap<ModuleIdx, String>,
-) -> rustc_hash::FxHashMap<oxc_syntax::symbol::SymbolId, String> {
-    use crate::link_stage::exports::resolve_export_local_name;
-    use oxc_ast::ast::Statement;
-
-    let module = &scan_result.module_table[module_idx];
-    let program_body = &scan_result.ast_table[module_idx].body;
-    let mut import_renames = rustc_hash::FxHashMap::default();
-
-    for stmt in program_body {
-        if let Statement::ImportDeclaration(import_decl) = stmt
-            && let Some(specifiers) = &import_decl.specifiers
-            && let Some(source_idx) =
-                module.resolve_internal_specifier(import_decl.source.value.as_str())
-        {
-            let source_module = &scan_result.module_table[source_idx];
-            for spec in specifiers {
-                match spec {
-                    oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) => {
-                        let imported_alias = s.imported.name().to_string();
-                        let local_name = resolve_export_local_name(source_module, &imported_alias)
-                            .unwrap_or(imported_alias);
-                        let resolved_imported = canonical_names
-                            .resolve_name(source_module, &local_name)
-                            .map_or(local_name, ToString::to_string);
-                        if s.local.name.as_str() != resolved_imported
-                            && let Some(symbol_id) = s.local.symbol_id.get()
-                        {
-                            import_renames.insert(symbol_id, resolved_imported);
-                        }
-                    }
-                    oxc_ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => {
-                        if let Some(mut actual_name) =
-                            default_export_names.get(&source_module.idx).cloned()
-                        {
-                            if let Some(renamed) =
-                                canonical_names.resolve_name(source_module, &actual_name)
-                            {
-                                actual_name = renamed.to_string();
-                            }
-                            if def.local.name.as_str() != actual_name
-                                && let Some(symbol_id) = def.local.symbol_id.get()
-                            {
-                                import_renames.insert(symbol_id, actual_name);
-                            }
-                        }
-                    }
-                    oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {}
-                }
-            }
-        }
-    }
-
-    import_renames
 }

@@ -46,7 +46,8 @@ pub struct BundleResult {
 /// architecture: Scan → Link → Generate.
 ///
 /// Owns the scan and link outputs, allowing the generate stage to be run
-/// separately or multiple times with different options.
+/// separately. Note that `generate` can only be called once because the
+/// single-entry fast path takes ownership of AST statements via `TakeIn`.
 pub struct Bundle<'a> {
     scan_output: ScanStageOutput<'a>,
     link_output: LinkStageOutput,
@@ -71,6 +72,9 @@ impl<'a> Bundle<'a> {
     }
 
     /// Run the generate stage, producing one output per entry point.
+    ///
+    /// Only the `sourcemap`, `cjs_default`, and `cwd` fields of `options` are
+    /// used; `input` and `cwd` should match those passed to [`Bundle::new`].
     ///
     /// Takes `&mut self` because the single-entry fast path takes ownership of
     /// AST statements (via `TakeIn`) to avoid cloning. This means `generate`
