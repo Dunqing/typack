@@ -9,11 +9,11 @@ use super::namespace::{
     collect_declaration_names, collect_export_specifier, collect_module_exports,
 };
 use super::types::{
-    ExportedName, ExternalImport, ExternalStarExport, GenerateAcc, GenerateSharedCtx,
-    ImportSpecifier, ImportSpecifierKind,
+    ExportedName, ExternalImport, ExternalStarExport, GenerateAcc, ImportSpecifier,
+    ImportSpecifierKind,
 };
 use crate::link_stage::exports::{find_external_reexport_source, resolve_export_origin};
-use crate::link_stage::{ModuleLinkMeta, StatementAction};
+use crate::link_stage::{LinkStageOutput, ModuleLinkMeta, PerEntryLinkData, StatementAction};
 use crate::scan_stage::ScanResult;
 use crate::types::ModuleIdx;
 
@@ -24,7 +24,8 @@ pub(super) fn collect_module_outputs(
     scan_result: &ScanResult,
     module_idx: ModuleIdx,
     meta: &ModuleLinkMeta,
-    shared: &GenerateSharedCtx<'_>,
+    per_entry: &PerEntryLinkData,
+    link_output: &LinkStageOutput,
     acc: &mut GenerateAcc,
 ) {
     let module = &scan_result.modules[module_idx];
@@ -35,7 +36,8 @@ pub(super) fn collect_module_outputs(
             stmt,
             &meta.statement_actions[i],
             module,
-            shared,
+            per_entry,
+            link_output,
             acc,
         );
     }
@@ -48,7 +50,8 @@ fn collect_statement_outputs<'a>(
     stmt: &Statement<'a>,
     action: &StatementAction,
     module: &crate::types::Module<'a>,
-    shared: &GenerateSharedCtx<'_>,
+    per_entry: &PerEntryLinkData,
+    link_output: &LinkStageOutput,
     acc: &mut GenerateAcc,
 ) {
     match stmt {
@@ -62,7 +65,8 @@ fn collect_statement_outputs<'a>(
                     let before_len = acc.exports.len();
                     collect_declaration_names(decl, &mut acc.exports);
                     for exp in &mut acc.exports[before_len..] {
-                        if let Some(new_name) = shared.rename_plan.resolve_name(module, &exp.local)
+                        if let Some(new_name) =
+                            link_output.rename_plan.resolve_name(module, &exp.local)
                         {
                             exp.local = new_name.to_string();
                         }
@@ -132,11 +136,11 @@ fn collect_statement_outputs<'a>(
                             }
                             if local_name == "default"
                                 && let Some(name) =
-                                    shared.default_export_names.get(&local_module_idx)
+                                    link_output.default_export_names.get(&local_module_idx)
                             {
                                 local_name.clone_from(name);
                             }
-                            if let Some(new_name) = shared
+                            if let Some(new_name) = link_output
                                 .rename_plan
                                 .resolve_name(&scan_result.modules[local_module_idx], &local_name)
                             {
@@ -170,8 +174,8 @@ fn collect_statement_outputs<'a>(
                             .get_root_binding(oxc_span::Ident::from(spec.local.name()));
                         if let Some(symbol_id) = symbol_id
                             && let Some(source_module_idx) =
-                                shared.namespace_aliases.get(&symbol_id)
-                            && let Some(wrap) = shared.namespace_wraps.get(source_module_idx)
+                                per_entry.namespace_aliases.get(&symbol_id)
+                            && let Some(wrap) = per_entry.namespace_wraps.get(source_module_idx)
                         {
                             acc.exports.push(ExportedName {
                                 local: wrap.namespace_name.clone(),
@@ -183,7 +187,7 @@ fn collect_statement_outputs<'a>(
                             collect_export_specifier(spec, &mut acc.exports, spec_is_type);
                             for exp in &mut acc.exports[before_len..] {
                                 if let Some(new_name) =
-                                    shared.rename_plan.resolve_name(module, &exp.local)
+                                    link_output.rename_plan.resolve_name(module, &exp.local)
                                 {
                                     exp.local = new_name.to_string();
                                 }
@@ -259,7 +263,7 @@ fn collect_statement_outputs<'a>(
                 let name = exported.name().to_string();
                 if let Some(source_module_idx) = internal_source_idx {
                     if module.is_entry
-                        && let Some(wrap) = shared.namespace_wraps.get(&source_module_idx)
+                        && let Some(wrap) = per_entry.namespace_wraps.get(&source_module_idx)
                     {
                         acc.exports.push(ExportedName {
                             local: wrap.namespace_name.clone(),
@@ -300,7 +304,7 @@ fn collect_statement_outputs<'a>(
                     );
                     acc.imports.extend(star_external_imports);
                     for exp in &mut acc.exports[before_len..] {
-                        if let Some(new_name) = shared
+                        if let Some(new_name) = link_output
                             .rename_plan
                             .resolve_name(&scan_result.modules[source_module_idx], &exp.local)
                         {

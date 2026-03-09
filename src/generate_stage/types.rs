@@ -1,12 +1,9 @@
 //! Data structures shared across generate-stage submodules.
 
 use oxc_diagnostics::OxcDiagnostic;
-use oxc_syntax::symbol::SymbolId;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
-use crate::link_stage::RenamePlan;
-pub(super) use crate::link_stage::{ExportedName, NamespaceWrapInfo};
-use crate::types::ModuleIdx;
+pub(super) use crate::link_stage::ExportedName;
 
 /// An import specifier collected from an external import.
 pub(super) struct ImportSpecifier {
@@ -53,14 +50,6 @@ pub(super) struct ModuleOutput {
     pub(super) namespace_wrapper: Option<String>,
     pub(super) code: String,
     pub(super) map: Option<oxc_sourcemap::SourceMap>,
-}
-
-pub(super) struct GenerateSharedCtx<'s> {
-    pub(super) namespace_wraps: &'s FxHashMap<ModuleIdx, NamespaceWrapInfo>,
-    pub(super) namespace_aliases: &'s FxHashMap<SymbolId, ModuleIdx>,
-    pub(super) rename_plan: &'s RenamePlan,
-    pub(super) default_export_names: &'s FxHashMap<ModuleIdx, String>,
-    pub(super) helper_reserved_names: &'s FxHashSet<String>,
 }
 
 #[derive(Default)]

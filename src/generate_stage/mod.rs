@@ -100,7 +100,6 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
     ) -> GenerateOutput {
         let mut output = OutputAssembler::default();
         let mut acc = GenerateAcc::default();
-        let rename_plan = &self.link_output.rename_plan;
         let per_entry = build_per_entry_link_data(
             self.scan_result,
             entry_idx,
@@ -114,19 +113,10 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
 
         acc.warnings.extend(per_entry.namespace_warnings.iter().cloned());
 
-        let shared = GenerateSharedCtx {
-            namespace_wraps: &per_entry.namespace_wraps,
-            namespace_aliases: &per_entry.namespace_aliases,
-            rename_plan,
-            default_export_names: &self.link_output.default_export_names,
-            helper_reserved_names: &per_entry.helper_reserved_names,
-        };
-
         let mut module_outputs: VecDeque<ModuleOutput> = VecDeque::new();
         for module_idx_usize in (0..self.scan_result.modules.len()).rev() {
             let module_idx = ModuleIdx::from_usize(module_idx_usize);
-            if let Some(module_output) =
-                self.generate_module_ast(module_idx, &shared, &per_entry, &mut acc)
+            if let Some(module_output) = self.generate_module_ast(module_idx, &per_entry, &mut acc)
             {
                 module_outputs.push_front(module_output);
             }
@@ -218,11 +208,10 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
     fn generate_module_ast(
         &self,
         module_idx: ModuleIdx,
-        shared: &GenerateSharedCtx<'_>,
         per_entry: &PerEntryLinkData,
         acc: &mut GenerateAcc,
     ) -> Option<ModuleOutput> {
-        let ns_wrap = shared.namespace_wraps.get(&module_idx);
+        let ns_wrap = per_entry.namespace_wraps.get(&module_idx);
         let module_has_augmentation = self.scan_result.modules[module_idx].has_augmentation;
 
         // Check if the module is needed: either it has pre-computed link meta,
@@ -242,8 +231,8 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                 self.scan_result,
                 module_idx,
                 None,
-                shared.rename_plan,
-                shared.default_export_names,
+                &self.link_output.rename_plan,
+                &self.link_output.default_export_names,
             );
             &fallback_meta
         };
@@ -252,7 +241,14 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         // actions and collect exports, imports, star exports into acc.
         let exports_start = acc.exports.len();
         let imports_start = acc.imports.len();
-        analysis::collect_module_outputs(self.scan_result, module_idx, meta, shared, acc);
+        analysis::collect_module_outputs(
+            self.scan_result,
+            module_idx,
+            meta,
+            per_entry,
+            self.link_output,
+            acc,
+        );
 
         // Phase 2: Selective clone + transform — only clone statements that
         // survive tree-shaking, and for unwrapped exports clone only the inner
@@ -325,7 +321,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         apply_semantic_renames(
             module,
             self.allocator,
-            shared.rename_plan,
+            &self.link_output.rename_plan,
             &meta.import_renames,
             &mut transformed_body,
         );
@@ -342,7 +338,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
                 namespace_aliases: meta.ns_aliases.clone(),
                 external_ns_info: &meta.external_ns_info,
                 external_ns_members: FxHashMap::default(),
-                helper_reserved_names: shared.helper_reserved_names,
+                helper_reserved_names: &per_entry.helper_reserved_names,
                 warnings: &mut acc.warnings,
             };
             for stmt in &mut transformed_body {
