@@ -76,7 +76,7 @@ pub(super) struct DtsFinalizer<'a, 's> {
     pub ns_name_map: &'s mut FxHashMap<String, String>,
     pub scan_result: &'s ScanStageOutput<'a>,
     pub ns_wrapper_output: &'s mut String,
-    pub namespace_aliases: FxHashSet<SymbolId>,
+    pub namespace_aliases: &'s FxHashSet<SymbolId>,
     pub external_ns_info: &'s FxHashMap<SymbolId, (String, String)>,
     pub external_ns_members: FxHashMap<String, FxHashSet<String>>,
     pub helper_reserved_names: &'s FxHashSet<String>,
@@ -258,7 +258,7 @@ impl<'a> VisitMut<'a> for DtsFinalizer<'a, '_> {
         }
 
         if let Some(rewritten) =
-            strip_namespace_alias_type_name(self.ast, it, &self.namespace_aliases, self.scoping)
+            strip_namespace_alias_type_name(self.ast, it, self.namespace_aliases, self.scoping)
         {
             *it = rewritten;
         }
@@ -275,7 +275,7 @@ impl<'a> VisitMut<'a> for DtsFinalizer<'a, '_> {
         }
 
         if let Some(rewritten) =
-            strip_namespace_alias_expression(self.ast, it, &self.namespace_aliases, self.scoping)
+            strip_namespace_alias_expression(self.ast, it, self.namespace_aliases, self.scoping)
         {
             *it = rewritten;
             walk_mut::walk_expression(self, it);

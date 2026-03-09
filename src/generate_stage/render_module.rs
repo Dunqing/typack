@@ -53,58 +53,112 @@ pub(super) fn render_module<'a>(
     // declaration (not the export wrapper).
     let mut transformed_body = ast.vec();
 
-    for (i, action) in meta.statement_actions.iter().enumerate() {
-        match action {
-            StatementAction::Skip => {}
-            StatementAction::Include => {
-                let stmt = if single_entry {
-                    scan_result.ast_table[module_idx].body[i].take_in(allocator)
-                } else {
-                    scan_result.ast_table[module_idx].body[i].clone_in_with_semantic_ids(allocator)
-                };
-                transformed_body.push(stmt);
-            }
-            StatementAction::UnwrapExportDeclaration => {
-                let Statement::ExportNamedDeclaration(export) =
-                    &scan_result.ast_table[module_idx].body[i]
-                else {
-                    unreachable!()
-                };
-                let mut decl =
-                    export.declaration.as_ref().unwrap().clone_in_with_semantic_ids(allocator);
-                ensure_declare_on_declaration(&mut decl);
-                decl.span_mut().start = export.span.start;
-                transformed_body.push(Statement::from(decl));
-            }
-            StatementAction::UnwrapExportDefault => {
-                let Statement::ExportDefaultDeclaration(export_default) =
-                    &scan_result.ast_table[module_idx].body[i]
-                else {
-                    unreachable!()
-                };
-                let declaration = export_default.declaration.clone_in_with_semantic_ids(allocator);
-                match declaration {
-                    ExportDefaultDeclarationKind::FunctionDeclaration(mut func_decl) => {
-                        func_decl.span.start = export_default.span.start;
-                        if func_decl.id.is_none() {
-                            func_decl.id = Some(ast.binding_identifier(SPAN, "export_default"));
+    if single_entry {
+        // Single-entry fast path: take ownership of AST nodes (no cloning).
+        for (i, action) in meta.statement_actions.iter().enumerate() {
+            match action {
+                StatementAction::Skip => {}
+                StatementAction::Include => {
+                    let stmt = scan_result.ast_table[module_idx].body[i].take_in(allocator);
+                    transformed_body.push(stmt);
+                }
+                StatementAction::UnwrapExportDeclaration => {
+                    let stmt = scan_result.ast_table[module_idx].body[i].take_in(allocator);
+                    let Statement::ExportNamedDeclaration(export) = stmt else { unreachable!() };
+                    let export_span_start = export.span.start;
+                    let mut decl = export.unbox().declaration.unwrap();
+                    ensure_declare_on_declaration(&mut decl);
+                    decl.span_mut().start = export_span_start;
+                    transformed_body.push(Statement::from(decl));
+                }
+                StatementAction::UnwrapExportDefault => {
+                    let stmt = scan_result.ast_table[module_idx].body[i].take_in(allocator);
+                    let Statement::ExportDefaultDeclaration(export_default) = stmt else {
+                        unreachable!()
+                    };
+                    let export_default = export_default.unbox();
+                    let span_start = export_default.span.start;
+                    match export_default.declaration {
+                        ExportDefaultDeclarationKind::FunctionDeclaration(mut func_decl) => {
+                            func_decl.span.start = span_start;
+                            if func_decl.id.is_none() {
+                                func_decl.id = Some(ast.binding_identifier(SPAN, "export_default"));
+                            }
+                            func_decl.declare = true;
+                            transformed_body.push(Statement::FunctionDeclaration(func_decl));
                         }
-                        func_decl.declare = true;
-                        transformed_body.push(Statement::FunctionDeclaration(func_decl));
-                    }
-                    ExportDefaultDeclarationKind::ClassDeclaration(mut class_decl) => {
-                        class_decl.span.start = export_default.span.start;
-                        if class_decl.id.is_none() {
-                            class_decl.id = Some(ast.binding_identifier(SPAN, "export_default"));
+                        ExportDefaultDeclarationKind::ClassDeclaration(mut class_decl) => {
+                            class_decl.span.start = span_start;
+                            if class_decl.id.is_none() {
+                                class_decl.id =
+                                    Some(ast.binding_identifier(SPAN, "export_default"));
+                            }
+                            class_decl.declare = true;
+                            transformed_body.push(Statement::ClassDeclaration(class_decl));
                         }
-                        class_decl.declare = true;
-                        transformed_body.push(Statement::ClassDeclaration(class_decl));
+                        ExportDefaultDeclarationKind::TSInterfaceDeclaration(mut iface_decl) => {
+                            iface_decl.span.start = span_start;
+                            transformed_body.push(Statement::TSInterfaceDeclaration(iface_decl));
+                        }
+                        _ => {}
                     }
-                    ExportDefaultDeclarationKind::TSInterfaceDeclaration(mut iface_decl) => {
-                        iface_decl.span.start = export_default.span.start;
-                        transformed_body.push(Statement::TSInterfaceDeclaration(iface_decl));
+                }
+            }
+        }
+    } else {
+        // Multi-entry path: clone statements (AST is shared across entries).
+        for (i, action) in meta.statement_actions.iter().enumerate() {
+            match action {
+                StatementAction::Skip => {}
+                StatementAction::Include => {
+                    let stmt = scan_result.ast_table[module_idx].body[i]
+                        .clone_in_with_semantic_ids(allocator);
+                    transformed_body.push(stmt);
+                }
+                StatementAction::UnwrapExportDeclaration => {
+                    let Statement::ExportNamedDeclaration(export) =
+                        &scan_result.ast_table[module_idx].body[i]
+                    else {
+                        unreachable!()
+                    };
+                    let mut decl =
+                        export.declaration.as_ref().unwrap().clone_in_with_semantic_ids(allocator);
+                    ensure_declare_on_declaration(&mut decl);
+                    decl.span_mut().start = export.span.start;
+                    transformed_body.push(Statement::from(decl));
+                }
+                StatementAction::UnwrapExportDefault => {
+                    let Statement::ExportDefaultDeclaration(export_default) =
+                        &scan_result.ast_table[module_idx].body[i]
+                    else {
+                        unreachable!()
+                    };
+                    let declaration =
+                        export_default.declaration.clone_in_with_semantic_ids(allocator);
+                    match declaration {
+                        ExportDefaultDeclarationKind::FunctionDeclaration(mut func_decl) => {
+                            func_decl.span.start = export_default.span.start;
+                            if func_decl.id.is_none() {
+                                func_decl.id = Some(ast.binding_identifier(SPAN, "export_default"));
+                            }
+                            func_decl.declare = true;
+                            transformed_body.push(Statement::FunctionDeclaration(func_decl));
+                        }
+                        ExportDefaultDeclarationKind::ClassDeclaration(mut class_decl) => {
+                            class_decl.span.start = export_default.span.start;
+                            if class_decl.id.is_none() {
+                                class_decl.id =
+                                    Some(ast.binding_identifier(SPAN, "export_default"));
+                            }
+                            class_decl.declare = true;
+                            transformed_body.push(Statement::ClassDeclaration(class_decl));
+                        }
+                        ExportDefaultDeclarationKind::TSInterfaceDeclaration(mut iface_decl) => {
+                            iface_decl.span.start = export_default.span.start;
+                            transformed_body.push(Statement::TSInterfaceDeclaration(iface_decl));
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }
@@ -115,16 +169,15 @@ pub(super) fn render_module<'a>(
     }
 
     // For single-entry: compute and apply renames inline (full DtsFinalizer).
-    // For multi-entry: renames are pre-applied to the AST, so use empty rename
-    // map and only run the structural mutation parts of DtsFinalizer.
-    let merged_renames = if single_entry {
-        build_merged_renames(&link_output.canonical_names, module_idx, &meta.import_renames)
-    } else {
-        FxHashMap::default()
-    };
-
-    // Apply DtsFinalizer: rename + rewrite pass (renames are no-op for multi-entry).
-    let external_ns_members = {
+    // For multi-entry: renames are pre-applied, so only run DtsFinalizer when
+    // structural mutations are needed (inline import rewriting, namespace alias
+    // stripping). Skip the entire traversal for rename-only modules.
+    let external_ns_members = if single_entry || meta.needs_structural_mutation {
+        let merged_renames = if single_entry {
+            build_merged_renames(&link_output.canonical_names, module_idx, &meta.import_renames)
+        } else {
+            FxHashMap::default()
+        };
         let mut finalizer = DtsFinalizer {
             ast,
             allocator,
@@ -135,7 +188,7 @@ pub(super) fn render_module<'a>(
             ns_name_map: &mut acc.ns_name_map,
             scan_result,
             ns_wrapper_output: &mut acc.ns_wrapper_blocks,
-            namespace_aliases: meta.ns_aliases.clone(),
+            namespace_aliases: &meta.ns_aliases,
             external_ns_info: &meta.external_ns_info,
             external_ns_members: FxHashMap::default(),
             helper_reserved_names: &per_entry.helper_reserved_names,
@@ -143,6 +196,8 @@ pub(super) fn render_module<'a>(
         };
         finalizer.visit_statements(&mut transformed_body);
         finalizer.external_ns_members
+    } else {
+        FxHashMap::default()
     };
 
     // Convert external namespace imports to named imports based on
@@ -228,7 +283,22 @@ pub(super) fn render_module<'a>(
         )
     };
 
-    let (comments, hashbang, directives) = {
+    let (comments, hashbang, directives) = if single_entry {
+        // Single-entry: take ownership instead of cloning.
+        let program = &mut scan_result.ast_table[module_idx];
+        let raw_comments = program.comments.take_in(allocator);
+        let comments = ast.vec_from_iter(raw_comments.into_iter().filter(|comment| {
+            let comment_text = comment.span.source_text(source_text).trim();
+            if reference_directive_set.contains(comment_text) {
+                return false;
+            }
+            !(comment_text.starts_with("//# sourceMappingURL=")
+                || comment_text.starts_with("//@ sourceMappingURL="))
+        }));
+        let hashbang = program.hashbang.take();
+        let directives = program.directives.take_in(allocator);
+        (comments, hashbang, directives)
+    } else {
         let program = &scan_result.ast_table[module_idx];
         let raw_comments = program.comments.clone_in_with_semantic_ids(allocator);
         let comments = ast.vec_from_iter(raw_comments.into_iter().filter(|comment| {
@@ -254,8 +324,6 @@ pub(super) fn render_module<'a>(
         transformed_body,
     );
 
-    let input_sourcemap = scan_result.module_table[module_idx].input_sourcemap.clone();
-
     let mut codegen_options = CodegenOptions {
         indent_char: IndentChar::Space,
         indent_width: 2,
@@ -267,12 +335,16 @@ pub(super) fn render_module<'a>(
     let codegen_return = Codegen::new().with_options(codegen_options).build(&program);
     let code = codegen_return.code;
     let map = if sourcemap_enabled {
-        match (codegen_return.map, input_sourcemap) {
-            (Some(codegen_map), Some(input_map)) => {
-                let module_path = &scan_result.module_table[module_idx].path;
-                Some(sourcemap::compose_sourcemaps(&codegen_map, &input_map, module_path, cwd))
+        match codegen_return.map {
+            Some(codegen_map) => {
+                if let Some(input_map) = &scan_result.module_table[module_idx].input_sourcemap {
+                    let module_path = &scan_result.module_table[module_idx].path;
+                    Some(sourcemap::compose_sourcemaps(&codegen_map, input_map, module_path, cwd))
+                } else {
+                    Some(codegen_map)
+                }
             }
-            (map, _) => map,
+            None => None,
         }
     } else {
         None
@@ -336,8 +408,8 @@ fn prune_unused_imports(
         }
         collector.finish()
     };
-    let module_exported_locals: FxHashSet<String> =
-        module_exports.iter().map(|export| export.local.clone()).collect();
+    let module_exported_locals: FxHashSet<&str> =
+        module_exports.iter().map(|export| export.local.as_str()).collect();
 
     // Drop TypeScript-generated external namespace helpers whose only
     // usages were inside tree-shaken declarations. Keep user-authored
@@ -345,7 +417,7 @@ fn prune_unused_imports(
     // plugin's current snapshot semantics.
     if !external_ns_info.is_empty() {
         for (specifier, local_name) in external_ns_info.values() {
-            if referenced_names.contains(local_name)
+            if referenced_names.contains(local_name.as_str())
                 || module_exported_locals.contains(local_name.as_str())
                 || !is_generated_external_namespace_helper(local_name)
             {
@@ -394,28 +466,28 @@ fn prune_unused_imports(
     }
 }
 
-struct ReferencedNameCollector {
-    referenced_names: FxHashSet<String>,
+struct ReferencedNameCollector<'a> {
+    referenced_names: FxHashSet<&'a str>,
 }
 
-impl ReferencedNameCollector {
+impl<'a> ReferencedNameCollector<'a> {
     fn new() -> Self {
         Self { referenced_names: FxHashSet::default() }
     }
 
-    fn finish(self) -> FxHashSet<String> {
+    fn finish(self) -> FxHashSet<&'a str> {
         self.referenced_names
     }
 
-    fn record_name(&mut self, name: &str) {
-        self.referenced_names.insert(name.to_string());
+    fn record_name(&mut self, name: &'a str) {
+        self.referenced_names.insert(name);
     }
 
-    fn record_identifier_reference(&mut self, ident: &IdentifierReference<'_>) {
+    fn record_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
         self.record_name(ident.name.as_str());
     }
 
-    fn record_value_type_name(&mut self, type_name: &TSTypeName<'_>) {
+    fn record_value_type_name(&mut self, type_name: &TSTypeName<'a>) {
         match type_name {
             TSTypeName::IdentifierReference(ident) => {
                 self.record_identifier_reference(ident);
@@ -430,7 +502,7 @@ impl ReferencedNameCollector {
     }
 }
 
-impl<'a> Visit<'a> for ReferencedNameCollector {
+impl<'a> Visit<'a> for ReferencedNameCollector<'a> {
     fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
         self.record_identifier_reference(ident);
     }
