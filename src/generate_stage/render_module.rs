@@ -44,7 +44,7 @@ pub(super) fn render_module<'a>(
     acc: &mut GenerateAcc,
     single_entry: bool,
 ) -> Option<RenderedModule> {
-    let ns_wrap = per_entry.namespace_wraps.get(&module_idx);
+    let ns_wrap = per_entry.namespace_wraps[module_idx].as_ref();
     let ast = AstBuilder::new(allocator);
     let module = &scan_result.module_table[module_idx];
 

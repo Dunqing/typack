@@ -152,7 +152,7 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
 
             // Check if the module is needed: either it has pre-computed link meta,
             // or it has augmentation declarations.
-            let meta = per_entry.module_metas.get(&module_idx);
+            let meta = per_entry.module_metas[module_idx].as_ref();
             if meta.is_none() && !module_has_augmentation {
                 continue;
             }

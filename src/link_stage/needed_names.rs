@@ -7,6 +7,7 @@ use oxc_ast::ast::{
     TSModuleReference, TSType, TSTypeName, TSTypeQuery, TSTypeQueryExprName,
 };
 use oxc_ast_visit::Visit;
+use oxc_index::IndexVec;
 use oxc_span::Ident;
 use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -51,24 +52,22 @@ struct ModuleExpansion {
 
 /// Precomputed data shared across all entries for tree-shaking analysis.
 pub struct NeededNamesCtx {
-    declaration_graphs: FxHashMap<ModuleIdx, Vec<DeclarationNode>>,
-    root_names: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    declaration_graphs: IndexVec<ModuleIdx, Vec<DeclarationNode>>,
+    root_names: IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 }
 
 impl NeededNamesCtx {
     pub fn new(scan_result: &ScanStageOutput<'_>) -> Self {
         let declaration_graphs = build_declaration_graphs(scan_result);
-        let root_names: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>> = scan_result
+        let root_names: IndexVec<ModuleIdx, FxHashMap<SymbolId, String>> = scan_result
             .module_table
             .iter()
             .map(|m| {
-                let map: FxHashMap<SymbolId, String> = m
-                    .scoping
+                m.scoping
                     .get_bindings(m.scoping.root_scope_id())
                     .into_iter()
                     .map(|(name, &sid)| (sid, name.to_string()))
-                    .collect();
-                (m.idx, map)
+                    .collect()
             })
             .collect();
         Self { declaration_graphs, root_names }
@@ -114,7 +113,7 @@ pub fn build_needed_names_with_ctx(
     );
     propagate_entry_retained_dependencies(
         entry,
-        declaration_graphs.get(&entry.idx).map_or(&[], Vec::as_slice),
+        declaration_graphs[entry.idx].as_slice(),
         scan_result,
         &mut needed_names,
         &mut needed_exports,
@@ -156,7 +155,7 @@ pub fn build_needed_names_with_ctx(
 
             let expansion = expand_module_graph(
                 module,
-                declaration_graphs.get(&module.idx).map_or(&[], Vec::as_slice),
+                declaration_graphs[module.idx].as_slice(),
                 direct_needed,
                 is_whole,
                 symbol_kinds.get(&module.idx).and_then(|entry| entry.as_ref()),
@@ -266,7 +265,7 @@ fn seed_entry_exports(
     needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     whole_modules: &mut FxHashSet<ModuleIdx>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
-    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    root_names: &IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) {
     let entry_info = &entry.export_import_info;
 
@@ -419,7 +418,7 @@ fn propagate_entry_retained_dependencies(
     needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     whole_modules: &mut FxHashSet<ModuleIdx>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
-    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    root_names: &IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) {
     for node in nodes {
         for dep in &node.cross_module_deps {
@@ -542,7 +541,7 @@ fn add_namespace_requirement(
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
     target_idx: ModuleIdx,
     scan_result: &ScanStageOutput<'_>,
-    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    root_names: &IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) -> bool {
     let mut changed = false;
     for name in collect_all_exported_names(target_idx, scan_result) {
@@ -568,7 +567,7 @@ fn mark_module_whole_needed(
     module_idx: ModuleIdx,
     reason: NeededReason,
     scan_result: &ScanStageOutput<'_>,
-    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    root_names: &IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) -> bool {
     let mut changed = whole_modules.insert(module_idx);
     for name in collect_all_exported_names(module_idx, scan_result) {
@@ -594,7 +593,7 @@ fn add_needed_name(
     module_idx: ModuleIdx,
     name: &str,
     reason: NeededReason,
-    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    root_names: &IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) -> bool {
     let inserted = needed_exports.entry(module_idx).or_default().insert(name.to_string());
     add_needed_reason(reasons, module_idx, name, reason);
@@ -613,10 +612,10 @@ fn add_needed_symbol(
     module_idx: ModuleIdx,
     symbol_id: SymbolId,
     reason: NeededReason,
-    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    root_names: &IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) -> bool {
     let inserted = needed_names.entry(module_idx).or_default().insert(symbol_id);
-    if let Some(name) = root_names.get(&module_idx).and_then(|m| m.get(&symbol_id)) {
+    if let Some(name) = root_names[module_idx].get(&symbol_id) {
         add_needed_reason(reasons, module_idx, name, reason);
     }
     inserted
@@ -639,11 +638,11 @@ fn add_needed_reason(
 /// Builds per-module declaration dependency graphs for semantic expansion.
 fn build_declaration_graphs(
     scan_result: &ScanStageOutput<'_>,
-) -> FxHashMap<ModuleIdx, Vec<DeclarationNode>> {
+) -> IndexVec<ModuleIdx, Vec<DeclarationNode>> {
     scan_result
         .module_table
         .iter()
-        .map(|module| (module.idx, collect_declaration_nodes(module, scan_result)))
+        .map(|module| collect_declaration_nodes(module, scan_result))
         .collect()
 }
 
@@ -888,7 +887,7 @@ fn propagate_needed_names(
     needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
     scan_result: &ScanStageOutput<'_>,
-    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    root_names: &IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) -> bool {
     use std::collections::VecDeque;
 

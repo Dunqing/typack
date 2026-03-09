@@ -4,6 +4,7 @@
 //! Inspired by `oxc_module_graph`'s `build_resolved_exports` algorithm.
 
 use oxc_diagnostics::OxcDiagnostic;
+use oxc_index::IndexVec;
 use rustc_hash::FxHashMap;
 
 use crate::scan_stage::ScanStageOutput;
@@ -29,7 +30,9 @@ type ModuleResolvedExports = FxHashMap<String, ResolvedExport>;
 /// to determine where each exported name ultimately comes from. Detects ambiguity
 /// when multiple `export *` sources provide the same name.
 pub fn build_resolved_exports(scan_result: &ScanStageOutput<'_>) -> Vec<OxcDiagnostic> {
-    let mut resolved: FxHashMap<ModuleIdx, ModuleResolvedExports> = FxHashMap::default();
+    let module_count = scan_result.module_table.len();
+    let mut resolved: IndexVec<ModuleIdx, Option<ModuleResolvedExports>> =
+        std::iter::repeat_n(None, module_count).collect();
     let mut warnings: Vec<OxcDiagnostic> = Vec::new();
 
     // Process modules in topological order (dependencies before dependents).
@@ -67,7 +70,7 @@ pub fn build_resolved_exports(scan_result: &ScanStageOutput<'_>) -> Vec<OxcDiagn
                 ExportSource::SourceReexport { specifier, imported_name } => {
                     // Follow the chain to the source module's resolved exports.
                     if let Some(target_idx) = module.resolve_internal_specifier(specifier)
-                        && let Some(target_resolved) = resolved.get(&target_idx)
+                        && let Some(target_resolved) = resolved[target_idx].as_ref()
                         && let Some(origin) = target_resolved.get(imported_name)
                     {
                         module_resolved.insert(
@@ -102,7 +105,7 @@ pub fn build_resolved_exports(scan_result: &ScanStageOutput<'_>) -> Vec<OxcDiagn
             let Some(target_idx) = module.resolve_internal_specifier(&star.specifier) else {
                 continue;
             };
-            let Some(target_resolved) = resolved.get(&target_idx) else {
+            let Some(target_resolved) = resolved[target_idx].as_ref() else {
                 continue;
             };
 
@@ -157,7 +160,7 @@ pub fn build_resolved_exports(scan_result: &ScanStageOutput<'_>) -> Vec<OxcDiagn
             }
             if let ExportSource::SourceReexport { specifier, imported_name } = &entry.source
                 && let Some(target_idx) = module.resolve_internal_specifier(specifier)
-                && let Some(target_resolved) = resolved.get(&target_idx)
+                && let Some(target_resolved) = resolved[target_idx].as_ref()
                 && let Some(origin) = target_resolved.get(imported_name)
             {
                 module_resolved.insert(
@@ -171,7 +174,7 @@ pub fn build_resolved_exports(scan_result: &ScanStageOutput<'_>) -> Vec<OxcDiagn
             }
         }
 
-        resolved.insert(module.idx, module_resolved);
+        resolved[module.idx] = Some(module_resolved);
     }
 
     warnings

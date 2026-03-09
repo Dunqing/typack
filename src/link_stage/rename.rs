@@ -33,7 +33,7 @@ struct ModuleRenameData {
 /// 1. Register exported names in entry re-export order (priority order).
 /// 2. Register non-exported names in reverse module order.
 pub fn build_canonical_names(scan_result: &ScanStageOutput<'_>) -> CanonicalNames {
-    let mut canonical_names = CanonicalNames::default();
+    let mut canonical_names = CanonicalNames::with_module_count(scan_result.module_table.len());
 
     reserve_synthetic_helper_names(scan_result, &mut canonical_names.used_names);
 

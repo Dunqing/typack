@@ -9,6 +9,7 @@ use std::path::Path;
 use cow_utils::CowUtils;
 use oxc_ast::ast::{Declaration, ExportDefaultDeclarationKind, ExportSpecifier, Statement};
 use oxc_diagnostics::OxcDiagnostic;
+use oxc_index::IndexVec;
 use oxc_span::Ident;
 use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -172,12 +173,13 @@ pub fn collect_module_exports(
 /// the emitted `declare namespace { export { ... } }` block references the
 /// correct names in the bundled output.
 pub fn apply_namespace_wrap_renames(
-    namespace_wraps: &mut FxHashMap<ModuleIdx, NamespaceWrapInfo>,
+    namespace_wraps: &mut IndexVec<ModuleIdx, Option<NamespaceWrapInfo>>,
     canonical_names: &CanonicalNames,
     scan_result: &ScanStageOutput<'_>,
 ) {
-    for (module_idx, wrap) in namespace_wraps.iter_mut() {
-        let module = &scan_result.module_table[*module_idx];
+    for (module_idx, wrap_opt) in namespace_wraps.iter_mut_enumerated() {
+        let Some(wrap) = wrap_opt else { continue };
+        let module = &scan_result.module_table[module_idx];
         for export_name in &mut wrap.export_names {
             if let Some(renamed) = canonical_names.resolve_name(module, &export_name.local) {
                 export_name.local = renamed.to_string();
@@ -248,17 +250,13 @@ pub fn collect_reserved_decl_names(
 /// `$2`, etc. suffixes until a unique name is found. Emits a diagnostic
 /// warning for each rename.
 pub fn deconflict_namespace_wrap_names(
-    namespace_wraps: &mut FxHashMap<ModuleIdx, NamespaceWrapInfo>,
+    namespace_wraps: &mut IndexVec<ModuleIdx, Option<NamespaceWrapInfo>>,
     reserved_names: &FxHashSet<String>,
     warnings: &mut Vec<OxcDiagnostic>,
 ) {
     let mut used_names = reserved_names.clone();
-    let mut sorted_keys: Vec<ModuleIdx> = namespace_wraps.keys().copied().collect();
-    sorted_keys.sort();
-    for module_idx in sorted_keys {
-        let Some(wrap) = namespace_wraps.get_mut(&module_idx) else {
-            continue;
-        };
+    for wrap_opt in namespace_wraps.iter_mut() {
+        let Some(wrap) = wrap_opt else { continue };
         let base_name = wrap.namespace_name.clone();
         if used_names.insert(base_name.clone()) {
             continue;
@@ -287,14 +285,13 @@ pub fn deconflict_namespace_wrap_names(
 pub fn pre_scan_namespace_info(
     scan_result: &ScanStageOutput<'_>,
     entry_idx: ModuleIdx,
-    all_module_aliases: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>>,
+    all_module_aliases: &IndexVec<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>>,
 ) -> (FxHashMap<ModuleIdx, NamespaceWrapInfo>, FxHashMap<SymbolId, ModuleIdx>) {
     let entry = &scan_result.module_table[entry_idx];
 
     let mut namespace_wraps: FxHashMap<ModuleIdx, NamespaceWrapInfo> = FxHashMap::default();
     // Entry-level namespace aliases: `import * as X` SymbolId -> source module idx
-    let namespace_aliases: FxHashMap<SymbolId, ModuleIdx> =
-        all_module_aliases.get(&entry_idx).cloned().unwrap_or_default();
+    let namespace_aliases: FxHashMap<SymbolId, ModuleIdx> = all_module_aliases[entry_idx].clone();
     let mut re_exported_names: Vec<SymbolId> = Vec::new();
 
     // Scan entry for export patterns (using stored AST)
@@ -364,8 +361,7 @@ pub fn pre_scan_namespace_info(
                 .scoping
                 .get_root_binding(Ident::from(exp.local.as_str()));
             if let Some(symbol_id) = symbol_key
-                && let Some(target_idx) =
-                    all_module_aliases.get(module_idx).and_then(|m| m.get(&symbol_id))
+                && let Some(target_idx) = all_module_aliases[*module_idx].get(&symbol_id)
                 && !namespace_wraps.contains_key(target_idx)
                 && !new_wraps.iter().any(|(idx, _)| idx == target_idx)
             {
@@ -399,8 +395,7 @@ pub fn pre_scan_namespace_info(
                 .scoping
                 .get_root_binding(Ident::from(exp.local.as_str()));
             if let Some(symbol_id) = symbol_key
-                && let Some(target_idx) =
-                    all_module_aliases.get(module_idx).and_then(|m| m.get(&symbol_id))
+                && let Some(target_idx) = all_module_aliases[*module_idx].get(&symbol_id)
                 && let Some(target_wrap) = namespace_wraps.get(target_idx)
             {
                 updated_exports.push(ExportedName {

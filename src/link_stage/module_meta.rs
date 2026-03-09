@@ -6,6 +6,7 @@
 
 use oxc_ast::ast::{ExportDefaultDeclaration, ExportDefaultDeclarationKind, Statement};
 use oxc_ast_visit::Visit;
+use oxc_index::IndexVec;
 use oxc_semantic::Scoping;
 use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -27,7 +28,7 @@ pub fn compute_module_link_meta(
     module_idx: ModuleIdx,
     needed_symbol_kinds: Option<&FxHashMap<SymbolId, NeededKindFlags>>,
     canonical_names: &CanonicalNames,
-    default_export_names: &FxHashMap<ModuleIdx, String>,
+    default_export_names: &IndexVec<ModuleIdx, Option<String>>,
 ) -> ModuleLinkMeta {
     let module = &scan_result.module_table[module_idx];
     let program_body = &scan_result.ast_table[module_idx].body;
@@ -86,7 +87,7 @@ pub fn compute_module_link_meta(
                         }
                         oxc_ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => {
                             if let Some(mut actual_name) =
-                                default_export_names.get(&source_module.idx).cloned()
+                                default_export_names[source_module.idx].clone()
                             {
                                 if let Some(renamed) =
                                     canonical_names.resolve_name(source_module, &actual_name)

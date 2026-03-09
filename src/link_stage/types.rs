@@ -1,6 +1,7 @@
 //! Data types for the link stage output.
 
 use oxc_diagnostics::OxcDiagnostic;
+use oxc_index::IndexVec;
 use oxc_syntax::symbol::{SymbolFlags, SymbolId};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -96,7 +97,7 @@ pub struct NamespaceWrapInfo {
 #[derive(Default, Clone)]
 pub struct CanonicalNames {
     /// Symbol-based renames grouped by module for O(1) per-module lookup.
-    per_module_symbols: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    per_module_symbols: IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
     /// Fallback name renames for when symbol resolution isn't possible
     /// (e.g. names from declaration merging).
     pub fallback_name_renames: FxHashMap<(ModuleIdx, String), String>,
@@ -196,9 +197,9 @@ impl NeededNamesPlan {
 /// Global link-stage output computed once across all entries.
 pub struct LinkStageOutput {
     pub canonical_names: CanonicalNames,
-    pub default_export_names: FxHashMap<ModuleIdx, String>,
+    pub default_export_names: IndexVec<ModuleIdx, Option<String>>,
     pub reserved_decl_names: FxHashSet<String>,
-    pub all_module_aliases: FxHashMap<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>>,
+    pub all_module_aliases: IndexVec<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>>,
     pub warnings: Vec<OxcDiagnostic>,
 }
 
@@ -207,9 +208,9 @@ pub struct PerEntryLinkData {
     #[expect(dead_code)]
     pub needed_names_plan: NeededNamesPlan,
     /// Pre-computed per-module analysis from the link stage.
-    pub module_metas: FxHashMap<ModuleIdx, ModuleLinkMeta>,
+    pub module_metas: IndexVec<ModuleIdx, Option<ModuleLinkMeta>>,
     /// Modules that need namespace wrappers for this entry.
-    pub namespace_wraps: FxHashMap<ModuleIdx, NamespaceWrapInfo>,
+    pub namespace_wraps: IndexVec<ModuleIdx, Option<NamespaceWrapInfo>>,
     /// Entry-level `import * as X` aliases: local symbol → source module.
     pub namespace_aliases: FxHashMap<SymbolId, ModuleIdx>,
     /// Reserved declaration names (from global + namespace wrap names).
@@ -219,8 +220,16 @@ pub struct PerEntryLinkData {
 }
 
 impl CanonicalNames {
+    pub fn with_module_count(n: usize) -> Self {
+        Self {
+            per_module_symbols: std::iter::repeat_with(FxHashMap::default).take(n).collect(),
+            fallback_name_renames: FxHashMap::default(),
+            used_names: FxHashSet::default(),
+        }
+    }
+
     pub fn resolve_symbol(&self, module_idx: ModuleIdx, symbol_id: SymbolId) -> Option<&str> {
-        self.per_module_symbols.get(&module_idx)?.get(&symbol_id).map(String::as_str)
+        self.per_module_symbols[module_idx].get(&symbol_id).map(String::as_str)
     }
 
     pub fn resolve_name(&self, module: &Module<'_>, name: &str) -> Option<&str> {
@@ -238,7 +247,8 @@ impl CanonicalNames {
         &self,
         module_idx: ModuleIdx,
     ) -> Option<&FxHashMap<SymbolId, String>> {
-        self.per_module_symbols.get(&module_idx)
+        let map = &self.per_module_symbols[module_idx];
+        if map.is_empty() { None } else { Some(map) }
     }
 
     /// Insert a symbol rename for a specific module.
@@ -248,6 +258,6 @@ impl CanonicalNames {
         symbol_id: SymbolId,
         new_name: String,
     ) {
-        self.per_module_symbols.entry(module_idx).or_default().insert(symbol_id, new_name);
+        self.per_module_symbols[module_idx].insert(symbol_id, new_name);
     }
 }

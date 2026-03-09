@@ -136,7 +136,7 @@ fn collect_statement_outputs<'a>(
                             }
                             if local_name == "default"
                                 && let Some(name) =
-                                    link_output.default_export_names.get(&local_module_idx)
+                                    link_output.default_export_names[local_module_idx].as_ref()
                             {
                                 local_name.clone_from(name);
                             }
@@ -175,7 +175,8 @@ fn collect_statement_outputs<'a>(
                         if let Some(symbol_id) = symbol_id
                             && let Some(source_module_idx) =
                                 per_entry.namespace_aliases.get(&symbol_id)
-                            && let Some(wrap) = per_entry.namespace_wraps.get(source_module_idx)
+                            && let Some(wrap) =
+                                per_entry.namespace_wraps[*source_module_idx].as_ref()
                         {
                             acc.exports.push(ExportedName {
                                 local: wrap.namespace_name.clone(),
@@ -263,7 +264,7 @@ fn collect_statement_outputs<'a>(
                 let name = exported.name().to_string();
                 if let Some(source_module_idx) = internal_source_idx {
                     if module.is_entry
-                        && let Some(wrap) = per_entry.namespace_wraps.get(&source_module_idx)
+                        && let Some(wrap) = per_entry.namespace_wraps[source_module_idx].as_ref()
                     {
                         acc.exports.push(ExportedName {
                             local: wrap.namespace_name.clone(),

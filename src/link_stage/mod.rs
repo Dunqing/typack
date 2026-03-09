@@ -12,6 +12,7 @@ pub mod warnings;
 
 use oxc_ast::ast::Statement;
 use oxc_diagnostics::OxcDiagnostic;
+use oxc_index::IndexVec;
 use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -29,7 +30,7 @@ pub use types::NeededKindFlags;
 use types::NeededNamesPlan;
 pub use types::{
     CanonicalNames, ExportedName, ExternalImport, ImportSpecifier, ImportSpecifierKind,
-    LinkStageOutput, ModuleLinkMeta, PerEntryLinkData, StatementAction,
+    LinkStageOutput, ModuleLinkMeta, NamespaceWrapInfo, PerEntryLinkData, StatementAction,
 };
 
 use warnings::collect_link_warnings;
@@ -52,10 +53,12 @@ impl<'a> LinkStage<'a> {
         let canonical_names = build_canonical_names(self.scan_output);
 
         // Build default_export_names for all modules
-        let mut default_export_names: FxHashMap<ModuleIdx, String> = FxHashMap::default();
+        let module_count = self.scan_output.module_table.len();
+        let mut default_export_names: IndexVec<ModuleIdx, Option<String>> =
+            std::iter::repeat_n(None, module_count).collect();
         for module in &self.scan_output.module_table {
             if let Some(name) = resolve_default_export_name(module.idx, self.scan_output) {
-                default_export_names.insert(module.idx, name);
+                default_export_names[module.idx] = Some(name);
             }
         }
 
@@ -70,8 +73,8 @@ impl<'a> LinkStage<'a> {
 
         // Compute all_module_aliases by scanning all modules for ImportNamespaceSpecifier.
         // Grouped by module index for O(1) per-entry lookup.
-        let mut all_module_aliases: FxHashMap<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>> =
-            FxHashMap::default();
+        let mut all_module_aliases: IndexVec<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>> =
+            std::iter::repeat_with(FxHashMap::default).take(module_count).collect();
         for module in &self.scan_output.module_table {
             for stmt in &self.scan_output.ast_table[module.idx].body {
                 if let Statement::ImportDeclaration(import_decl) = stmt
@@ -85,10 +88,7 @@ impl<'a> LinkStage<'a> {
                                 module.resolve_internal_specifier(import_decl.source.value.as_str())
                             && let Some(symbol_id) = ns.local.symbol_id.get()
                         {
-                            all_module_aliases
-                                .entry(module.idx)
-                                .or_default()
-                                .insert(symbol_id, target_idx);
+                            all_module_aliases[module.idx].insert(symbol_id, target_idx);
                         }
                     }
                 }
@@ -141,24 +141,29 @@ pub fn build_per_entry_link_data(
     }
 
     // Pre-compute per-module link metadata for all modules in the plan.
-    let module_metas: FxHashMap<ModuleIdx, types::ModuleLinkMeta> = needed_names_plan
-        .symbol_kinds
-        .iter()
-        .map(|(&module_idx, kinds)| {
-            let meta = module_meta::compute_module_link_meta(
-                scan_result,
-                module_idx,
-                kinds.as_ref(),
-                &link_output.canonical_names,
-                &link_output.default_export_names,
-            );
-            (module_idx, meta)
-        })
-        .collect();
+    let module_count = scan_result.module_table.len();
+    let mut module_metas: IndexVec<ModuleIdx, Option<types::ModuleLinkMeta>> =
+        std::iter::repeat_with(|| None).take(module_count).collect();
+    for (&module_idx, kinds) in &needed_names_plan.symbol_kinds {
+        let meta = module_meta::compute_module_link_meta(
+            scan_result,
+            module_idx,
+            kinds.as_ref(),
+            &link_output.canonical_names,
+            &link_output.default_export_names,
+        );
+        module_metas[module_idx] = Some(meta);
+    }
 
     // Pre-compute namespace info for this entry.
-    let (mut namespace_wraps, namespace_aliases) =
+    let (namespace_wraps_map, namespace_aliases) =
         namespace::pre_scan_namespace_info(scan_result, entry_idx, &link_output.all_module_aliases);
+    // Convert namespace_wraps from FxHashMap to IndexVec
+    let mut namespace_wraps: IndexVec<ModuleIdx, Option<NamespaceWrapInfo>> =
+        std::iter::repeat_with(|| None).take(module_count).collect();
+    for (idx, info) in namespace_wraps_map {
+        namespace_wraps[idx] = Some(info);
+    }
     namespace::apply_namespace_wrap_renames(
         &mut namespace_wraps,
         &link_output.canonical_names,
@@ -171,7 +176,7 @@ pub fn build_per_entry_link_data(
         &helper_reserved_names,
         &mut namespace_warnings,
     );
-    for wrap in namespace_wraps.values() {
+    for wrap in namespace_wraps.iter().flatten() {
         helper_reserved_names.insert(wrap.namespace_name.clone());
     }
 
@@ -590,7 +595,7 @@ mod tests {
         project.write_file("index.d.ts", "export interface Foo { value: string }\n");
 
         let scan_result = project.scan("index.d.ts");
-        let mut canonical_names = CanonicalNames::default();
+        let mut canonical_names = CanonicalNames::with_module_count(scan_result.module_table.len());
         canonical_names
             .fallback_name_renames
             .insert((scan_result.entry_points[0], "Foo".to_string()), "Foo$1".to_string());
