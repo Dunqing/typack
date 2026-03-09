@@ -17,15 +17,16 @@ use std::collections::VecDeque;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
-use oxc_allocator::{Allocator, CloneIn};
+use oxc_allocator::{Allocator, TakeIn};
 use oxc_ast::AstBuilder;
 use oxc_ast::ast::{
-    ExportDefaultDeclarationKind, IdentifierReference, Statement, TSTypeName, TSTypeQuery,
+    Declaration, ExportDefaultDeclarationKind, IdentifierReference, Statement, TSTypeName,
+    TSTypeQuery,
 };
 use oxc_ast_visit::{Visit, VisitMut};
 use oxc_codegen::{Codegen, CodegenOptions, IndentChar};
 use oxc_diagnostics::OxcDiagnostic;
-use oxc_span::{GetSpanMut, SPAN};
+use oxc_span::{GetSpan, GetSpanMut, SPAN};
 use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -41,12 +42,16 @@ use types::*;
 
 /// Generate stage: produces the bundled `.d.ts` output.
 pub struct GenerateStage<'a, 'b> {
-    scan_result: &'b ScanResult<'a>,
+    scan_result: &'b mut ScanResult<'a>,
     allocator: &'a Allocator,
     sourcemap: bool,
     cjs_default: bool,
     cwd: &'b Path,
     link_output: &'b LinkStageOutput,
+    /// Tracks import renames applied to each module body by the previous entry.
+    /// Used to fold undo into the next entry's rename pass, avoiding a separate
+    /// AST walk to reverse renames.
+    prev_import_renames: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
 }
 
 /// Output from generate stage.
@@ -58,34 +63,56 @@ pub struct GenerateOutput {
 
 impl<'a, 'b> GenerateStage<'a, 'b> {
     pub fn new(
-        scan_result: &'b ScanResult<'a>,
+        scan_result: &'b mut ScanResult<'a>,
         allocator: &'a Allocator,
         sourcemap: bool,
         cjs_default: bool,
         cwd: &'b Path,
         link_output: &'b LinkStageOutput,
     ) -> Self {
-        Self { scan_result, allocator, sourcemap, cjs_default, cwd, link_output }
+        Self {
+            scan_result,
+            allocator,
+            sourcemap,
+            cjs_default,
+            cwd,
+            link_output,
+            prev_import_renames: FxHashMap::default(),
+        }
     }
 
     /// Generate the bundled `.d.ts` output for all entries.
-    pub fn generate_all(&self) -> Vec<GenerateOutput> {
+    pub fn generate_all(&mut self) -> Vec<GenerateOutput> {
         // Collect and deduplicate reference directives from all modules (shared across entries)
-        let mut seen_set: FxHashSet<&str> = FxHashSet::default();
-        let mut unique_directives: Vec<&str> = Vec::new();
+        let mut seen_set: FxHashSet<String> = FxHashSet::default();
+        let mut unique_directives: Vec<String> = Vec::new();
         for module in &self.scan_result.modules {
             for directive in &module.reference_directives {
-                if seen_set.insert(directive.as_str()) {
-                    unique_directives.push(directive.as_str());
+                if seen_set.insert(directive.clone()) {
+                    unique_directives.push(directive.clone());
                 }
             }
+        }
+
+        // Pre-filter comments: remove reference directives and source map comments.
+        for module in &mut self.scan_result.modules {
+            let source_text = module.source;
+            let reference_directive_set: FxHashSet<String> =
+                module.reference_directives.iter().cloned().collect();
+            module.program.comments.retain(|comment| {
+                let text = comment.span.source_text(source_text).trim();
+                !reference_directive_set.contains(text)
+                    && !text.starts_with("//# sourceMappingURL=")
+                    && !text.starts_with("//@ sourceMappingURL=")
+            });
         }
 
         // Precompute declaration graphs and root names once for all entries
         let needed_names_ctx = NeededNamesCtx::new(self.scan_result);
 
-        self.scan_result
-            .entry_indices
+        // Clone entry_indices to avoid borrow conflict with &mut self
+        let entry_indices = self.scan_result.entry_indices.clone();
+        entry_indices
             .iter()
             .map(|&entry_idx| self.generate_entry(entry_idx, &unique_directives, &needed_names_ctx))
             .collect()
@@ -93,9 +120,9 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
 
     /// Generate the bundled `.d.ts` output for a single entry.
     fn generate_entry(
-        &self,
+        &mut self,
         entry_idx: ModuleIdx,
-        unique_directives: &[&str],
+        unique_directives: &[String],
         needed_names_ctx: &NeededNamesCtx,
     ) -> GenerateOutput {
         let mut output = OutputAssembler::default();
@@ -116,7 +143,8 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         let mut module_outputs: VecDeque<ModuleOutput> = VecDeque::new();
         for module_idx_usize in (0..self.scan_result.modules.len()).rev() {
             let module_idx = ModuleIdx::from_usize(module_idx_usize);
-            if let Some(module_output) = self.generate_module_ast(module_idx, &per_entry, &mut acc)
+            if let Some(module_output) =
+                self.generate_module_ast(module_idx, entry_idx, &per_entry, &mut acc)
             {
                 module_outputs.push_front(module_output);
             }
@@ -206,8 +234,9 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
     }
 
     fn generate_module_ast(
-        &self,
+        &mut self,
         module_idx: ModuleIdx,
+        _entry_idx: ModuleIdx, // kept for future use
         per_entry: &PerEntryLinkData,
         acc: &mut GenerateAcc,
     ) -> Option<ModuleOutput> {
@@ -250,65 +279,78 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             acc,
         );
 
-        // Phase 2: Selective clone + transform — only clone statements that
-        // survive tree-shaking, and for unwrapped exports clone only the inner
-        // declaration (not the export wrapper).
         let ast = AstBuilder::new(self.allocator);
         let mut transformed_body = ast.vec();
-        let module = &self.scan_result.modules[module_idx];
 
-        for (i, action) in meta.statement_actions.iter().enumerate() {
-            match action {
-                StatementAction::Skip => {}
-                StatementAction::Include => {
-                    let stmt = module.program.body[i].clone_in_with_semantic_ids(self.allocator);
-                    transformed_body.push(stmt);
+        // Phase 2 (move path): take statements out of the original body,
+        // transform in place — no clone needed.
+        {
+            let body = &mut self.scan_result.modules[module_idx].program.body;
+            for (i, action) in meta.statement_actions.iter().enumerate() {
+                if matches!(action, StatementAction::Skip) {
+                    continue;
                 }
-                StatementAction::UnwrapExportDeclaration => {
-                    let Statement::ExportNamedDeclaration(export) = &module.program.body[i] else {
-                        unreachable!()
-                    };
-                    let mut decl = export
-                        .declaration
-                        .as_ref()
-                        .unwrap()
-                        .clone_in_with_semantic_ids(self.allocator);
-                    ensure_declare_on_declaration(&mut decl);
-                    decl.span_mut().start = export.span.start;
-                    transformed_body.push(Statement::from(decl));
-                }
-                StatementAction::UnwrapExportDefault => {
-                    let Statement::ExportDefaultDeclaration(export_default) =
-                        &module.program.body[i]
-                    else {
-                        unreachable!()
-                    };
-                    let declaration =
-                        export_default.declaration.clone_in_with_semantic_ids(self.allocator);
-                    match declaration {
-                        ExportDefaultDeclarationKind::FunctionDeclaration(mut func_decl) => {
-                            func_decl.span.start = export_default.span.start;
-                            if func_decl.id.is_none() {
-                                func_decl.id = Some(ast.binding_identifier(SPAN, "export_default"));
-                            }
-                            func_decl.declare = true;
-                            transformed_body.push(Statement::FunctionDeclaration(func_decl));
-                        }
-                        ExportDefaultDeclarationKind::ClassDeclaration(mut class_decl) => {
-                            class_decl.span.start = export_default.span.start;
-                            if class_decl.id.is_none() {
-                                class_decl.id =
-                                    Some(ast.binding_identifier(SPAN, "export_default"));
-                            }
-                            class_decl.declare = true;
-                            transformed_body.push(Statement::ClassDeclaration(class_decl));
-                        }
-                        ExportDefaultDeclarationKind::TSInterfaceDeclaration(mut iface_decl) => {
-                            iface_decl.span.start = export_default.span.start;
-                            transformed_body.push(Statement::TSInterfaceDeclaration(iface_decl));
-                        }
-                        _ => {}
+                let stmt = body[i].take_in(self.allocator);
+                match action {
+                    StatementAction::Include => {
+                        transformed_body.push(stmt);
                     }
+                    StatementAction::UnwrapExportDeclaration => {
+                        if let Statement::ExportNamedDeclaration(export) = stmt {
+                            // First time: unwrap export
+                            let export = export.unbox();
+                            let span_start = export.span.start;
+                            let mut decl = export.declaration.unwrap();
+                            ensure_declare_on_declaration(&mut decl);
+                            decl.span_mut().start = span_start;
+                            transformed_body.push(Statement::from(decl));
+                        } else {
+                            // Already unwrapped by a prior entry pass
+                            transformed_body.push(stmt);
+                        }
+                    }
+                    StatementAction::UnwrapExportDefault => {
+                        if let Statement::ExportDefaultDeclaration(export_default) = stmt {
+                            // First time: unwrap export default
+                            let export_default = export_default.unbox();
+                            let span_start = export_default.span.start;
+                            match export_default.declaration {
+                                ExportDefaultDeclarationKind::FunctionDeclaration(
+                                    mut func_decl,
+                                ) => {
+                                    func_decl.span.start = span_start;
+                                    if func_decl.id.is_none() {
+                                        func_decl.id =
+                                            Some(ast.binding_identifier(SPAN, "export_default"));
+                                    }
+                                    func_decl.declare = true;
+                                    transformed_body
+                                        .push(Statement::FunctionDeclaration(func_decl));
+                                }
+                                ExportDefaultDeclarationKind::ClassDeclaration(mut class_decl) => {
+                                    class_decl.span.start = span_start;
+                                    if class_decl.id.is_none() {
+                                        class_decl.id =
+                                            Some(ast.binding_identifier(SPAN, "export_default"));
+                                    }
+                                    class_decl.declare = true;
+                                    transformed_body.push(Statement::ClassDeclaration(class_decl));
+                                }
+                                ExportDefaultDeclarationKind::TSInterfaceDeclaration(
+                                    mut iface_decl,
+                                ) => {
+                                    iface_decl.span.start = span_start;
+                                    transformed_body
+                                        .push(Statement::TSInterfaceDeclaration(iface_decl));
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            // Already unwrapped by a prior entry pass
+                            transformed_body.push(stmt);
+                        }
+                    }
+                    StatementAction::Skip => unreachable!(),
                 }
             }
         }
@@ -318,16 +360,23 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
         }
 
         // Apply semantic renames (symbol renames from link stage + import renames).
-        apply_semantic_renames(
-            module,
-            self.allocator,
-            &self.link_output.rename_plan,
-            &meta.import_renames,
-            &mut transformed_body,
-        );
+        // Also folds undo of previous entry's import renames into this pass.
+        {
+            let module = &self.scan_result.modules[module_idx];
+            let prev = self.prev_import_renames.get(&module_idx);
+            apply_semantic_renames(
+                module,
+                self.allocator,
+                &self.link_output.rename_plan,
+                &meta.import_renames,
+                prev,
+                &mut transformed_body,
+            );
+        }
 
         // AST-level import-type rewriting and namespace alias flattening.
         let external_ns_members = {
+            let module = &self.scan_result.modules[module_idx];
             let mut rewriter = InlineImportAndNamespaceRewriter {
                 ast,
                 module,
@@ -417,34 +466,23 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             &meta.external_ns_info,
         );
 
-        let (relative_path, program_span, source_type, source_text, reference_directive_set) = {
+        let (relative_path, program_span, source_type, source_text) = {
             let module = &self.scan_result.modules[module_idx];
             (
                 module.relative_path.clone(),
                 module.program.span,
                 module.program.source_type,
                 module.source,
-                module.reference_directives.iter().cloned().collect::<FxHashSet<String>>(),
             )
         };
 
-        let (comments, hashbang, directives) = {
-            let module = &self.scan_result.modules[module_idx];
-            let raw_comments = module.program.comments.clone_in_with_semantic_ids(self.allocator);
-            let comments = ast.vec_from_iter(raw_comments.into_iter().filter(|comment| {
-                let comment_text = comment.span.source_text(source_text).trim();
-                if reference_directive_set.contains(comment_text) {
-                    return false;
-                }
-                !(comment_text.starts_with("//# sourceMappingURL=")
-                    || comment_text.starts_with("//@ sourceMappingURL="))
-            }));
-            let hashbang = module.program.hashbang.clone_in_with_semantic_ids(self.allocator);
-            let directives = module.program.directives.clone_in_with_semantic_ids(self.allocator);
-            (comments, hashbang, directives)
-        };
+        let comments =
+            self.scan_result.modules[module_idx].program.comments.take_in(self.allocator);
+        let hashbang = self.scan_result.modules[module_idx].program.hashbang.take();
+        let directives =
+            self.scan_result.modules[module_idx].program.directives.take_in(self.allocator);
 
-        let program = ast.program(
+        let mut program = ast.program(
             program_span,
             source_type,
             source_text,
@@ -453,6 +491,14 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             directives,
             transformed_body,
         );
+
+        // Track current import renames so the next entry's rename pass can
+        // undo them without a separate AST walk.
+        if meta.import_renames.is_empty() {
+            self.prev_import_renames.remove(&module_idx);
+        } else {
+            self.prev_import_renames.insert(module_idx, meta.import_renames.clone());
+        }
 
         let input_sourcemap = self.scan_result.modules[module_idx].input_sourcemap.clone();
 
@@ -465,6 +511,72 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             codegen_options.source_map_path = Some(PathBuf::from(&relative_path));
         }
         let codegen_return = Codegen::new().with_options(codegen_options).build(&program);
+
+        // Re-wrap unwrapped exports and restore statements in a single pass.
+        {
+            let module_body = &mut self.scan_result.modules[module_idx].program.body;
+            let mut transformed_idx = 0;
+            for (i, action) in meta.statement_actions.iter().enumerate() {
+                if matches!(action, StatementAction::Skip) {
+                    continue;
+                }
+                let stmt = program.body[transformed_idx].take_in(self.allocator);
+                module_body[i] = match action {
+                    StatementAction::UnwrapExportDeclaration => {
+                        if matches!(stmt, Statement::ExportNamedDeclaration(_)) {
+                            // Already wrapped from a prior pass.
+                            stmt
+                        } else {
+                            let decl = Declaration::try_from(stmt).unwrap();
+                            let span = decl.span();
+                            Statement::ExportNamedDeclaration(ast.alloc_export_named_declaration(
+                                span,
+                                Some(decl),
+                                ast.vec(),
+                                None::<oxc_ast::ast::StringLiteral<'a>>,
+                                oxc_ast::ast::ImportOrExportKind::Value,
+                                None::<oxc_ast::ast::WithClause<'a>>,
+                            ))
+                        }
+                    }
+                    StatementAction::UnwrapExportDefault => match stmt {
+                        Statement::FunctionDeclaration(func) => {
+                            Statement::ExportDefaultDeclaration(
+                                ast.alloc_export_default_declaration(
+                                    SPAN,
+                                    ExportDefaultDeclarationKind::FunctionDeclaration(func),
+                                ),
+                            )
+                        }
+                        Statement::ClassDeclaration(class) => Statement::ExportDefaultDeclaration(
+                            ast.alloc_export_default_declaration(
+                                SPAN,
+                                ExportDefaultDeclarationKind::ClassDeclaration(class),
+                            ),
+                        ),
+                        Statement::TSInterfaceDeclaration(iface) => {
+                            Statement::ExportDefaultDeclaration(
+                                ast.alloc_export_default_declaration(
+                                    SPAN,
+                                    ExportDefaultDeclarationKind::TSInterfaceDeclaration(iface),
+                                ),
+                            )
+                        }
+                        other => other,
+                    },
+                    _ => stmt,
+                };
+                transformed_idx += 1;
+            }
+        }
+
+        // Restore comments, hashbang, and directives back into the module.
+        self.scan_result.modules[module_idx].program.comments =
+            program.comments.take_in(self.allocator);
+        self.scan_result.modules[module_idx].program.hashbang = program.hashbang.take();
+        self.scan_result.modules[module_idx].program.directives =
+            program.directives.take_in(self.allocator);
+
         let code = codegen_return.code;
         let map = if self.sourcemap {
             match (codegen_return.map, input_sourcemap) {
@@ -590,19 +702,33 @@ fn prune_unused_imports(
 
 /// Apply semantic renames to the transformed AST body.
 ///
-/// Merges two rename sources into a single symbol map:
+/// Merges three rename sources into a single symbol map:
 /// 1. Symbol renames from the link stage (conflict resolution, e.g. `Foo` → `Foo$1`).
-/// 2. Import renames (mapping local import bindings to their resolved names in
-///    source modules).
+/// 2. Current import renames (mapping local import bindings to their resolved names).
+/// 3. Undo entries for previous import renames — symbols renamed by a prior entry
+///    but not by the current one are reset to their base name (link-renamed or original).
 fn apply_semantic_renames<'a>(
     module: &Module<'a>,
     allocator: &'a Allocator,
     rename_plan: &RenamePlan,
     import_renames: &FxHashMap<SymbolId, String>,
+    prev_import_renames: Option<&FxHashMap<SymbolId, String>>,
     body: &mut oxc_allocator::Vec<'a, Statement<'a>>,
 ) {
     let mut renamed_symbols =
         rename_plan.module_symbol_renames(module.idx).cloned().unwrap_or_default();
+
+    // Undo previous import renames for symbols not renamed by the current entry.
+    if let Some(prev) = prev_import_renames {
+        for &sym_id in prev.keys() {
+            if !import_renames.contains_key(&sym_id) {
+                let base = rename_plan
+                    .resolve_symbol(module.idx, sym_id)
+                    .unwrap_or_else(|| module.scoping.symbol_name(sym_id));
+                renamed_symbols.insert(sym_id, base.to_string());
+            }
+        }
+    }
 
     renamed_symbols.extend(import_renames.iter().map(|(k, v)| (*k, v.clone())));
 

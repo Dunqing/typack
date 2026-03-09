@@ -67,8 +67,8 @@ impl TypackBundler {
         let link_output = build_link_stage_output(&scan_result, rename_plan);
         all_warnings.extend(link_output.warnings.iter().cloned());
 
-        let stage = GenerateStage::new(
-            &scan_result,
+        let mut stage = GenerateStage::new(
+            &mut scan_result,
             &allocator,
             options.sourcemap,
             options.cjs_default,
