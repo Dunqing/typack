@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#2563EB"/>
+    </linearGradient>
+    <!-- Subtle shadow under the box -->
+    <radialGradient id="shadow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#000" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="76" fill="url(#bg)"/>
+
+  <!-- Soft ground shadow -->
+  <ellipse cx="256" cy="422" rx="160" ry="18" fill="url(#shadow)"/>
+
+  <!-- Box body — single outline, no center seam -->
+  <path d="M80 168 L256 256 L432 168 L432 328 L256 416 L80 328 Z"
+        fill="white" fill-opacity="0.1" stroke="white" stroke-width="10" stroke-linejoin="round"/>
+  <!-- Left face darker fill -->
+  <path d="M80 168 L256 256 L256 416 L80 328 Z"
+        fill="white" fill-opacity="0.04"/>
+
+  <!-- Left flap (open, tilted back) -->
+  <path d="M80 168 L160 96 L256 148 L256 256 L80 168 Z"
+        fill="white" fill-opacity="0.18" stroke="white" stroke-width="10" stroke-linejoin="round"/>
+
+  <!-- Right flap (open, tilted back) -->
+  <path d="M432 168 L352 96 L256 148 L256 256 L432 168 Z"
+        fill="white" fill-opacity="0.12" stroke="white" stroke-width="10" stroke-linejoin="round"/>
+
+  <!-- Flap fold highlights -->
+  <line x1="160" y1="96" x2="160" y2="168" stroke="white" stroke-width="4" opacity="0.1"/>
+  <line x1="352" y1="96" x2="352" y2="168" stroke="white" stroke-width="4" opacity="0.1"/>
+
+  <!-- ".d.ts" text inside box — slightly raised with subtle shadow -->
+  <text x="257" y="342" text-anchor="middle"
+        font-family="'SF Mono', 'Menlo', 'Consolas', monospace" font-weight="800"
+        font-size="64" fill="white" fill-opacity="0.08">.d.ts</text>
+  <text x="256" y="340" text-anchor="middle"
+        font-family="'SF Mono', 'Menlo', 'Consolas', monospace" font-weight="800"
+        font-size="64" fill="white">.d.ts</text>
+</svg>

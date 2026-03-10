@@ -1,6 +1,19 @@
-# typack
+<p align="center">
+  <img src="assets/logo.svg" alt="typack logo" width="180" />
+</p>
 
+<h1 align="center">typack</h1>
+
+<p align="center">
+
+[![Crates.io](https://img.shields.io/crates/v/typack?logo=rust)](https://crates.io/crates/typack)
+[![npm](https://img.shields.io/npm/v/typack?logo=npm)](https://www.npmjs.com/package/typack)
+[![docs.rs](https://img.shields.io/docsrs/typack?logo=docs.rs)](https://docs.rs/typack)
+[![CI](https://img.shields.io/github/actions/workflow/status/Dunqing/typack/ci.yml?logo=github&label=CI)](https://github.com/Dunqing/typack/actions/workflows/ci.yml)
 [![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json&style=flat&label=CodSpeed)](https://codspeed.io/Dunqing/typack?utm_source=badge)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
+</p>
 
 **ty**(pe) + **pack** — pack your TypeScript declarations.
 

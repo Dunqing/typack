@@ -48,6 +48,7 @@ function reportBug() {
     class="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 py-2 text-slate-800 sm:px-4 dark:border-neutral-700 dark:bg-neutral-900 dark:text-slate-100"
   >
     <div class="flex min-w-0 items-center gap-2 sm:gap-3">
+      <img src="/logo.svg" alt="typack" class="h-6 w-6 shrink-0 rounded" />
       <h1 class="shrink-0 text-sm font-semibold sm:text-base">Typack REPL</h1>
       <span v-if="!ready" class="rounded bg-amber-400 px-2 py-0.5 text-xs text-black"
         >Loading WASM...</span
