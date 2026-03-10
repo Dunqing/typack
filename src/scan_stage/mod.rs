@@ -361,7 +361,8 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
             input_sourcemap,
             export_import_info,
         });
-        ast_table.push(program);
+        let ast_idx = ast_table.push(program);
+        debug_assert_eq!(ast_idx, module_idx);
         path_to_idx.insert(path.to_path_buf(), module_idx);
         module_hints.insert(module_idx, hints);
         Ok(module_idx)

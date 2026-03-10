@@ -98,9 +98,13 @@ pub fn collect_module_exports(
                                     source: source.value.to_string(),
                                     specifiers: vec![ImportSpecifier {
                                         local: exported,
-                                        kind: ImportSpecifierKind::Named(
-                                            spec.local.name().to_string(),
-                                        ),
+                                        kind: if spec.local.name() == "default" {
+                                            ImportSpecifierKind::Default
+                                        } else {
+                                            ImportSpecifierKind::Named(
+                                                spec.local.name().to_string(),
+                                            )
+                                        },
                                     }],
                                     is_type_only: false,
                                     side_effect_only: false,
@@ -387,6 +391,8 @@ pub fn pre_scan_namespace_info(
     }
 
     // Second pass: update export lists to use namespace names for aliases.
+    // Re-collect keys to include newly inserted wraps from the first pass.
+    let wrap_keys: Vec<ModuleIdx> = namespace_wraps.keys().copied().collect();
     for module_idx in &wrap_keys {
         let wrap = &namespace_wraps[module_idx];
         let mut updated_exports = Vec::new();

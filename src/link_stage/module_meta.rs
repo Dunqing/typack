@@ -244,11 +244,7 @@ fn collect_decl_symbol_ids(decl: &oxc_ast::ast::Declaration<'_>, ids: &mut Vec<S
     match decl {
         oxc_ast::ast::Declaration::VariableDeclaration(var_decl) => {
             for declarator in &var_decl.declarations {
-                if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &declarator.id
-                    && let Some(symbol_id) = id.symbol_id.get()
-                {
-                    ids.push(symbol_id);
-                }
+                collect_binding_pattern_symbol_ids(&declarator.id, ids);
             }
         }
         oxc_ast::ast::Declaration::FunctionDeclaration(func) => {
@@ -289,6 +285,43 @@ fn collect_decl_symbol_ids(decl: &oxc_ast::ast::Declaration<'_>, ids: &mut Vec<S
         }
         oxc_ast::ast::Declaration::TSGlobalDeclaration(_)
         | oxc_ast::ast::Declaration::TSImportEqualsDeclaration(_) => {}
+    }
+}
+
+/// Recursively collect all `SymbolId`s from a `BindingPattern`.
+///
+/// Handles `BindingIdentifier` (leaf), `ObjectPattern`, `ArrayPattern`, and
+/// `AssignmentPattern` so that destructuring declarations like
+/// `const { x, y } = obj` or `const [a, b] = arr` are fully covered.
+fn collect_binding_pattern_symbol_ids(
+    pattern: &oxc_ast::ast::BindingPattern<'_>,
+    ids: &mut Vec<SymbolId>,
+) {
+    match pattern {
+        oxc_ast::ast::BindingPattern::BindingIdentifier(id) => {
+            if let Some(symbol_id) = id.symbol_id.get() {
+                ids.push(symbol_id);
+            }
+        }
+        oxc_ast::ast::BindingPattern::ObjectPattern(obj) => {
+            for prop in &obj.properties {
+                collect_binding_pattern_symbol_ids(&prop.value, ids);
+            }
+            if let Some(rest) = &obj.rest {
+                collect_binding_pattern_symbol_ids(&rest.argument, ids);
+            }
+        }
+        oxc_ast::ast::BindingPattern::ArrayPattern(arr) => {
+            for elem in arr.elements.iter().flatten() {
+                collect_binding_pattern_symbol_ids(elem, ids);
+            }
+            if let Some(rest) = &arr.rest {
+                collect_binding_pattern_symbol_ids(&rest.argument, ids);
+            }
+        }
+        oxc_ast::ast::BindingPattern::AssignmentPattern(assign) => {
+            collect_binding_pattern_symbol_ids(&assign.left, ids);
+        }
     }
 }
 
