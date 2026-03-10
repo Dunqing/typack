@@ -209,6 +209,7 @@ Module resolution uses `oxc_resolver` with the `"types"` export condition enable
 - **Side-effect imports** — `import "pkg"` statements are preserved when the target contains global or module augmentations
 - **Non-TS assets** — imports of CSS, images, etc. are silently skipped
 - **Reference directives** — `/// <reference path="..." />` directives are collected and deduplicated
+<!--
 
 ## Comparison with other tools
 
@@ -244,7 +245,8 @@ Several tools exist for bundling TypeScript declarations. Here's how they compar
 [rolldown-plugin-dts]: https://github.com/sxzz/rolldown-plugin-dts
 [@microsoft/api-extractor]: https://api-extractor.com/
 [dts-bundle-generator]: https://github.com/timocov/dts-bundle-generator
-[rollup-plugin-dts]: https://github.com/Swatinem/rollup-plugin-dts
+
+[rollup-plugin-dts]: https://github.com/Swatinem/rollup-plugin-dts -->
 
 ## Development
 
