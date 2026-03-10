@@ -16,68 +16,28 @@ use crate::link_stage::exports::resolve_export_local_name;
 use crate::scan_stage::ScanStageOutput;
 use crate::types::ModuleIdx;
 
-use super::types::{CanonicalNames, ModuleLinkMeta, StatementAction};
+use super::types::{CanonicalNames, ModuleLinkMeta, ModuleStaticMeta, StatementAction};
 
-/// Compute only the `import_renames` map for a single module.
+/// Compute entry-independent per-module metadata for a single module.
 ///
-/// This is a lightweight helper that only resolves import-to-canonical-name
-/// mappings without computing statement actions or detecting structural
-/// mutations. Used by `pre_apply_global_renames` which only needs renames.
-pub fn compute_import_renames(
+/// Collects import renames, namespace aliases, external namespace info,
+/// and reexported import names. These depend only on the module's AST and
+/// global canonical names, not on which entry point is being generated.
+pub fn compute_module_static_meta(
     scan_result: &ScanStageOutput,
     module_idx: ModuleIdx,
     canonical_names: &CanonicalNames,
     default_export_names: &IndexVec<ModuleIdx, Option<String>>,
-) -> FxHashMap<SymbolId, String> {
+) -> ModuleStaticMeta {
     let module = &scan_result.module_table[module_idx];
     let program_body = &scan_result.ast_table[module_idx].body;
-    let mut import_renames = FxHashMap::default();
-
-    for stmt in program_body {
-        if let Statement::ImportDeclaration(import_decl) = stmt
-            && let Some(specifiers) = &import_decl.specifiers
-            && let Some(source_idx) =
-                module.resolve_internal_specifier(import_decl.source.value.as_str())
-        {
-            let source_module = &scan_result.module_table[source_idx];
-            collect_import_renames_from_specifiers(
-                specifiers,
-                source_module,
-                canonical_names,
-                default_export_names,
-                &mut import_renames,
-            );
-        }
-    }
-
-    import_renames
-}
-
-/// Compute per-module link metadata for a single module.
-///
-/// Determines per-statement actions (include/skip/unwrap) and collects import
-/// rename info, namespace aliases, and external namespace info. This is pure
-/// link-stage data — no generate-stage dependency.
-pub fn compute_module_link_meta(
-    scan_result: &ScanStageOutput,
-    module_idx: ModuleIdx,
-    needed_symbol_kinds: Option<&FxHashMap<SymbolId, NeededKindFlags>>,
-    canonical_names: &CanonicalNames,
-    default_export_names: &IndexVec<ModuleIdx, Option<String>>,
-) -> ModuleLinkMeta {
-    let module = &scan_result.module_table[module_idx];
-    let program_body = &scan_result.ast_table[module_idx].body;
-    let mut meta = ModuleLinkMeta {
-        statement_actions: Vec::with_capacity(program_body.len()),
+    let mut meta = ModuleStaticMeta {
         import_renames: FxHashMap::default(),
         ns_aliases: FxHashSet::default(),
         external_ns_info: FxHashMap::default(),
         reexported_import_names: FxHashSet::default(),
-        needs_structural_mutation: false,
     };
 
-    // Pre-scan: collect import renames, ns aliases, external ns info,
-    // and reexported import names.
     for stmt in program_body {
         // Collect local names from `export { X }` (no source) for non-entry
         // modules. When X was imported from an external package, the import
@@ -132,17 +92,35 @@ pub fn compute_module_link_meta(
         }
     }
 
+    meta
+}
+
+/// Compute per-entry link metadata for a single module.
+///
+/// Determines per-statement actions (include/skip/unwrap) and whether structural
+/// mutations are needed. Uses the precomputed `ModuleStaticMeta` for
+/// entry-independent data.
+pub fn compute_module_link_meta(
+    scan_result: &ScanStageOutput,
+    module_idx: ModuleIdx,
+    needed_symbol_kinds: Option<&FxHashMap<SymbolId, NeededKindFlags>>,
+    static_meta: &ModuleStaticMeta,
+) -> ModuleLinkMeta {
+    let module = &scan_result.module_table[module_idx];
+    let program_body = &scan_result.ast_table[module_idx].body;
+
     // Determine per-statement actions.
+    let mut statement_actions = Vec::with_capacity(program_body.len());
     for stmt in program_body {
         let action = analyze_statement(stmt, module, needed_symbol_kinds);
-        meta.statement_actions.push(action);
+        statement_actions.push(action);
     }
 
     // Detect whether this module needs structural AST mutations beyond renames.
-    meta.needs_structural_mutation = !meta.ns_aliases.is_empty()
-        || has_internal_inline_imports(program_body, &meta.statement_actions, module);
+    let needs_structural_mutation = !static_meta.ns_aliases.is_empty()
+        || has_internal_inline_imports(program_body, &statement_actions, module);
 
-    meta
+    ModuleLinkMeta { statement_actions, needs_structural_mutation }
 }
 
 /// Collect import renames from a set of import specifiers against a resolved

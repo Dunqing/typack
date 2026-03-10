@@ -67,6 +67,18 @@ impl<'a> LinkStage<'a> {
             collect_link_warnings(&canonical_names, self.scan_output);
         warnings.extend(build_resolved_exports(self.scan_output));
 
+        // Compute entry-independent per-module metadata once for all modules.
+        let mut module_static_metas: IndexVec<ModuleIdx, types::ModuleStaticMeta> =
+            IndexVec::with_capacity(module_count);
+        for module in &self.scan_output.module_table {
+            module_static_metas.push(module_meta::compute_module_static_meta(
+                self.scan_output,
+                module.idx,
+                &canonical_names,
+                &default_export_names,
+            ));
+        }
+
         // Collect reserved declaration names
         let reserved_decl_names =
             namespace::collect_reserved_decl_names(self.scan_output, &canonical_names);
@@ -98,6 +110,7 @@ impl<'a> LinkStage<'a> {
         LinkStageOutput {
             canonical_names,
             default_export_names,
+            module_static_metas,
             reserved_decl_names,
             all_module_aliases,
             warnings,
@@ -140,7 +153,9 @@ pub fn build_per_entry_link_data(
         }
     }
 
-    // Pre-compute per-module link metadata for all modules in the plan.
+    // Pre-compute per-entry link metadata for all modules in the plan.
+    // Uses the precomputed static metas from LinkStageOutput to avoid
+    // redundantly recomputing import renames, ns aliases, etc.
     let module_count = scan_result.module_table.len();
     let mut module_metas: IndexVec<ModuleIdx, Option<types::ModuleLinkMeta>> =
         std::iter::repeat_with(|| None).take(module_count).collect();
@@ -149,8 +164,7 @@ pub fn build_per_entry_link_data(
             scan_result,
             module_idx,
             kinds.as_ref(),
-            &link_output.canonical_names,
-            &link_output.default_export_names,
+            &link_output.module_static_metas[module_idx],
         );
         module_metas[module_idx] = Some(meta);
     }

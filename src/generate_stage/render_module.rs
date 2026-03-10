@@ -172,9 +172,14 @@ pub(super) fn render_module<'a>(
     // For multi-entry: renames are pre-applied, so only run DtsFinalizer when
     // structural mutations are needed (inline import rewriting, namespace alias
     // stripping). Skip the entire traversal for rename-only modules.
+    let static_meta = &link_output.module_static_metas[module_idx];
     let external_ns_members = if single_entry || meta.needs_structural_mutation {
         let merged_renames = if single_entry {
-            build_merged_renames(&link_output.canonical_names, module_idx, &meta.import_renames)
+            build_merged_renames(
+                &link_output.canonical_names,
+                module_idx,
+                &static_meta.import_renames,
+            )
         } else {
             FxHashMap::default()
         };
@@ -188,8 +193,8 @@ pub(super) fn render_module<'a>(
             ns_name_map: &mut acc.ns_name_map,
             scan_result,
             ns_wrapper_output: &mut acc.ns_wrapper_blocks,
-            namespace_aliases: &meta.ns_aliases,
-            external_ns_info: &meta.external_ns_info,
+            namespace_aliases: &static_meta.ns_aliases,
+            external_ns_info: &static_meta.external_ns_info,
             external_ns_members: FxHashMap::default(),
             helper_reserved_names: &per_entry.helper_reserved_names,
             warnings: &mut acc.warnings,
@@ -203,7 +208,7 @@ pub(super) fn render_module<'a>(
     // Convert external namespace imports to named imports based on
     // member accesses recorded during the rewrite pass.
     for (specifier, members) in &external_ns_members {
-        let ns_local = meta
+        let ns_local = static_meta
             .external_ns_info
             .values()
             .find(|(spec, _)| spec == specifier)
@@ -267,8 +272,8 @@ pub(super) fn render_module<'a>(
         imports_start,
         &transformed_body,
         &acc.exports[exports_start..],
-        &meta.reexported_import_names,
-        &meta.external_ns_info,
+        &static_meta.reexported_import_names,
+        &static_meta.external_ns_info,
     );
 
     let (relative_path, program_span, source_type, source_text, reference_directive_set) = {

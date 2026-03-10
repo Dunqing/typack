@@ -19,12 +19,11 @@ pub enum StatementAction {
     UnwrapExportDefault,
 }
 
-/// Per-module analysis results computed during the link stage.
-/// Contains inclusion decisions and import resolution data
-/// that the generate stage consumes.
-pub struct ModuleLinkMeta {
-    /// Per-statement actions (indexed by position in original body).
-    pub statement_actions: Vec<StatementAction>,
+/// Entry-independent per-module metadata computed once during the link stage.
+///
+/// These fields depend only on the module's AST and global canonical names,
+/// not on which entry point is being generated.
+pub struct ModuleStaticMeta {
     /// Import renames: local symbol → resolved name from source module.
     pub import_renames: FxHashMap<SymbolId, String>,
     /// Internal namespace alias symbols.
@@ -33,6 +32,13 @@ pub struct ModuleLinkMeta {
     pub external_ns_info: FxHashMap<SymbolId, (String, String)>,
     /// Names from re-exported imports that must survive pruning.
     pub reexported_import_names: FxHashSet<String>,
+}
+
+/// Per-entry per-module analysis results computed during the link stage.
+/// Contains inclusion decisions that vary by entry point.
+pub struct ModuleLinkMeta {
+    /// Per-statement actions (indexed by position in original body).
+    pub statement_actions: Vec<StatementAction>,
     /// Whether the module needs structural AST mutations beyond simple renames.
     /// True when the module has namespace aliases to strip or inline import
     /// types (`import("...")`) referencing internal modules that need rewriting.
@@ -198,6 +204,8 @@ impl NeededNamesPlan {
 pub struct LinkStageOutput {
     pub canonical_names: CanonicalNames,
     pub default_export_names: IndexVec<ModuleIdx, Option<String>>,
+    /// Entry-independent per-module metadata (import renames, ns aliases, etc.).
+    pub module_static_metas: IndexVec<ModuleIdx, ModuleStaticMeta>,
     pub reserved_decl_names: FxHashSet<String>,
     pub all_module_aliases: IndexVec<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>>,
     pub warnings: Vec<OxcDiagnostic>,
