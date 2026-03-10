@@ -14,7 +14,7 @@ mod types;
 #[cfg(feature = "cli")]
 pub mod cli;
 
-pub use options::TypackOptions;
+pub use options::{GenerateOptions, TypackOptions};
 
 use oxc_allocator::Allocator;
 use oxc_diagnostics::OxcDiagnostic;
@@ -74,9 +74,6 @@ impl<'a> Bundle<'a> {
 
     /// Run the generate stage, producing one output per entry point.
     ///
-    /// Only the `sourcemap`, `cjs_default`, and `cwd` fields of `options` are
-    /// used; `input` and `cwd` should match those passed to [`Bundle::new`].
-    ///
     /// Takes `&mut self` because the single-entry fast path takes ownership of
     /// AST statements (via `TakeIn`) to avoid cloning. This means `generate`
     /// can only be called once.
@@ -84,15 +81,9 @@ impl<'a> Bundle<'a> {
     /// # Panics
     ///
     /// Panics if called more than once on the same `Bundle` instance.
-    pub fn generate(&mut self, options: &TypackOptions) -> BundleResult {
+    pub fn generate(&mut self, options: &GenerateOptions) -> BundleResult {
         assert!(!self.generated, "Bundle::generate can only be called once");
         self.generated = true;
-
-        debug_assert_eq!(
-            options.input.len(),
-            self.scan_output.entry_points.len(),
-            "options.input length must match the entries used in Bundle::new"
-        );
 
         let mut all_warnings: Vec<OxcDiagnostic> = self.scan_output.warnings.clone();
         all_warnings.extend(self.link_output.warnings.iter().cloned());
@@ -100,6 +91,7 @@ impl<'a> Bundle<'a> {
         // Pre-compute data that needs to read ast_table before we hand out &mut access.
         let unique_directives = collect_unique_directives(&self.scan_output);
         let needed_names_ctx = NeededNamesCtx::new(&self.scan_output);
+        let entry_count = self.scan_output.entry_points.len();
 
         let mut stage = GenerateStage::new(
             &mut self.scan_output,
@@ -111,7 +103,7 @@ impl<'a> Bundle<'a> {
             unique_directives,
             needed_names_ctx,
         );
-        let mut all_outputs = Vec::with_capacity(options.input.len());
+        let mut all_outputs = Vec::with_capacity(entry_count);
         for generated in stage.generate_all() {
             all_warnings.extend(generated.warnings);
             all_outputs.push(BundleOutput { code: generated.code, map: generated.map });
@@ -151,6 +143,6 @@ impl TypackBundler {
     pub fn bundle(options: &TypackOptions) -> Result<BundleResult, Vec<OxcDiagnostic>> {
         let allocator = Allocator::default();
         let mut bundle = Bundle::new(options, &allocator)?;
-        Ok(bundle.generate(options))
+        Ok(bundle.generate(&GenerateOptions::from_typack_options(options)))
     }
 }

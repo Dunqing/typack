@@ -82,10 +82,31 @@ pub fn collect_module_exports(
                     collect_declaration_names(d, exports);
                 } else if let Some(source) = &decl.source {
                     // Re-export: `export { X } from "..."`
-                    let source_is_external =
-                        module.resolve_internal_specifier(source.value.as_str()).is_none();
-                    for spec in &decl.specifiers {
-                        if source_is_external {
+                    if let Some(source_idx) =
+                        module.resolve_internal_specifier(source.value.as_str())
+                    {
+                        let source_module = &scan_result.module_table[source_idx];
+                        for spec in &decl.specifiers {
+                            // Internal re-export: resolve `default` to its actual
+                            // declaration name in the source module.
+                            let local_name = spec.local.name();
+                            if local_name == "default" {
+                                let resolved = super::exports::resolve_export_local_name(
+                                    source_module,
+                                    "default",
+                                )
+                                .unwrap_or_else(|| "default".to_string());
+                                exports.push(ExportedName {
+                                    local: resolved,
+                                    exported: spec.exported.name().to_string(),
+                                    is_type_only: false,
+                                });
+                            } else {
+                                collect_export_specifier(spec, exports, false);
+                            }
+                        }
+                    } else {
+                        for spec in &decl.specifiers {
                             // External: import creates the exported name as local binding
                             let exported = spec.exported.name().to_string();
                             exports.push(ExportedName {
@@ -111,8 +132,6 @@ pub fn collect_module_exports(
                                     from_reexport: true,
                                 });
                             }
-                        } else {
-                            collect_export_specifier(spec, exports, false);
                         }
                     }
                 } else {

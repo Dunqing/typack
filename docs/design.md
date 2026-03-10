@@ -91,7 +91,7 @@ When multiple modules declare the same name (e.g., two modules both export `Opti
 
 ```rust
 struct CanonicalNames {
-    per_module_symbols: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,  // O(1) per-module lookup
+    per_module_symbols: IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,  // O(1) per-module lookup
     fallback_name_renames: FxHashMap<(ModuleIdx, String), String>,  // For declaration merging
     used_names: FxHashSet<String>,
 }

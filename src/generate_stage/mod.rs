@@ -91,6 +91,22 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
     /// Pre-apply canonical name renames and import renames permanently to all
     /// module ASTs. Since renames are global (identical across entries), this is
     /// safe to do once before the entry loop.
+    ///
+    /// **Ordering safety**: This mutates AST binding identifier names before
+    /// `generate_entry` → `build_per_entry_link_data` calls
+    /// `compute_module_link_meta` again for each module. That second call is
+    /// safe because `compute_import_renames` is rename-resilient — it relies
+    /// on:
+    /// - **Symbol IDs** (`symbol_id.get()`) for import renames;
+    /// - **Scan-stage metadata** (`resolve_export_local_name`,
+    ///   `default_export_names`, `resolve_internal_specifier`) that is computed
+    ///   once during the scan stage and never modified by AST renames;
+    /// - **Source string literals** (`import_decl.source.value`,
+    ///   `spec.imported.name()`) that refer to module specifiers and imported
+    ///   aliases from the source text, not renamed binding identifiers.
+    ///
+    /// Therefore, no lookup in `compute_import_renames` depends on AST
+    /// identifier text that this pass modifies.
     fn pre_apply_global_renames(&mut self) {
         use crate::generate_stage::finalizer::RenameApplier;
         use oxc_ast_visit::VisitMut;
@@ -99,19 +115,19 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             let module_idx = ModuleIdx::from_usize(module_idx_usize);
             let module = &self.scan_result.module_table[module_idx];
 
-            // Reuse link stage's compute_module_link_meta to get import_renames,
-            // avoiding duplicated import rename logic.
-            let meta = crate::link_stage::module_meta::compute_module_link_meta(
+            // Use the lightweight helper that only computes import renames,
+            // avoiding the full ModuleLinkMeta computation (statement actions,
+            // ns aliases, structural mutation detection, etc.).
+            let import_renames = crate::link_stage::module_meta::compute_import_renames(
                 self.scan_result,
                 module_idx,
-                None,
                 &self.link_output.canonical_names,
                 &self.link_output.default_export_names,
             );
             let merged_renames = render_module::build_merged_renames(
                 &self.link_output.canonical_names,
                 module_idx,
-                &meta.import_renames,
+                &import_renames,
             );
             if merged_renames.is_empty() {
                 continue;
@@ -127,6 +143,11 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
     }
 
     /// Generate the bundled `.d.ts` output for a single entry.
+    ///
+    /// In multi-entry mode, `pre_apply_global_renames` has already mutated AST
+    /// binding identifiers. The `build_per_entry_link_data` call below
+    /// re-invokes `compute_module_link_meta` on the already-renamed ASTs; see
+    /// the safety comment on `pre_apply_global_renames` for why this is correct.
     fn generate_entry(&mut self, entry_idx: ModuleIdx, single_entry: bool) -> GenerateOutput {
         let mut joiner = SourceJoiner::default();
         let mut acc = GenerateAcc::default();

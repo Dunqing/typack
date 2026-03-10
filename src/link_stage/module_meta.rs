@@ -18,6 +18,41 @@ use crate::types::ModuleIdx;
 
 use super::types::{CanonicalNames, ModuleLinkMeta, StatementAction};
 
+/// Compute only the `import_renames` map for a single module.
+///
+/// This is a lightweight helper that only resolves import-to-canonical-name
+/// mappings without computing statement actions or detecting structural
+/// mutations. Used by `pre_apply_global_renames` which only needs renames.
+pub fn compute_import_renames(
+    scan_result: &ScanStageOutput,
+    module_idx: ModuleIdx,
+    canonical_names: &CanonicalNames,
+    default_export_names: &IndexVec<ModuleIdx, Option<String>>,
+) -> FxHashMap<SymbolId, String> {
+    let module = &scan_result.module_table[module_idx];
+    let program_body = &scan_result.ast_table[module_idx].body;
+    let mut import_renames = FxHashMap::default();
+
+    for stmt in program_body {
+        if let Statement::ImportDeclaration(import_decl) = stmt
+            && let Some(specifiers) = &import_decl.specifiers
+            && let Some(source_idx) =
+                module.resolve_internal_specifier(import_decl.source.value.as_str())
+        {
+            let source_module = &scan_result.module_table[source_idx];
+            collect_import_renames_from_specifiers(
+                specifiers,
+                source_module,
+                canonical_names,
+                default_export_names,
+                &mut import_renames,
+            );
+        }
+    }
+
+    import_renames
+}
+
 /// Compute per-module link metadata for a single module.
 ///
 /// Determines per-statement actions (include/skip/unwrap) and collects import
@@ -65,44 +100,20 @@ pub fn compute_module_link_meta(
                 // Internal import processing
                 let source_module = &scan_result.module_table[source_idx];
                 for spec in specifiers {
-                    match spec {
-                        oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) => {
-                            if let Some(symbol_id) = ns.local.symbol_id.get() {
-                                meta.ns_aliases.insert(symbol_id);
-                            }
-                        }
-                        oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) => {
-                            let imported_alias = s.imported.name().to_string();
-                            let local_name =
-                                resolve_export_local_name(source_module, &imported_alias)
-                                    .unwrap_or(imported_alias);
-                            let resolved_imported = canonical_names
-                                .resolve_name(source_module, &local_name)
-                                .map_or(local_name, ToString::to_string);
-                            if s.local.name.as_str() != resolved_imported
-                                && let Some(symbol_id) = s.local.symbol_id.get()
-                            {
-                                meta.import_renames.insert(symbol_id, resolved_imported);
-                            }
-                        }
-                        oxc_ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => {
-                            if let Some(mut actual_name) =
-                                default_export_names[source_module.idx].clone()
-                            {
-                                if let Some(renamed) =
-                                    canonical_names.resolve_name(source_module, &actual_name)
-                                {
-                                    actual_name = renamed.to_string();
-                                }
-                                if def.local.name.as_str() != actual_name
-                                    && let Some(symbol_id) = def.local.symbol_id.get()
-                                {
-                                    meta.import_renames.insert(symbol_id, actual_name);
-                                }
-                            }
-                        }
+                    if let oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) =
+                        spec
+                        && let Some(symbol_id) = ns.local.symbol_id.get()
+                    {
+                        meta.ns_aliases.insert(symbol_id);
                     }
                 }
+                collect_import_renames_from_specifiers(
+                    specifiers,
+                    source_module,
+                    canonical_names,
+                    default_export_names,
+                    &mut meta.import_renames,
+                );
             } else {
                 // External import — collect namespace specifiers
                 for spec in specifiers {
@@ -132,6 +143,51 @@ pub fn compute_module_link_meta(
         || has_internal_inline_imports(program_body, &meta.statement_actions, module);
 
     meta
+}
+
+/// Collect import renames from a set of import specifiers against a resolved
+/// internal source module. Shared by both `compute_import_renames` and
+/// `compute_module_link_meta`.
+fn collect_import_renames_from_specifiers(
+    specifiers: &oxc_allocator::Vec<'_, oxc_ast::ast::ImportDeclarationSpecifier<'_>>,
+    source_module: &crate::types::Module<'_>,
+    canonical_names: &CanonicalNames,
+    default_export_names: &IndexVec<ModuleIdx, Option<String>>,
+    import_renames: &mut FxHashMap<SymbolId, String>,
+) {
+    for spec in specifiers {
+        match spec {
+            oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {
+                // Namespace specifiers don't produce import renames
+            }
+            oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                let imported_alias = s.imported.name().to_string();
+                let local_name = resolve_export_local_name(source_module, &imported_alias)
+                    .unwrap_or(imported_alias);
+                let resolved_imported = canonical_names
+                    .resolve_name(source_module, &local_name)
+                    .map_or(local_name, ToString::to_string);
+                if s.local.name.as_str() != resolved_imported
+                    && let Some(symbol_id) = s.local.symbol_id.get()
+                {
+                    import_renames.insert(symbol_id, resolved_imported);
+                }
+            }
+            oxc_ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => {
+                if let Some(mut actual_name) = default_export_names[source_module.idx].clone() {
+                    if let Some(renamed) = canonical_names.resolve_name(source_module, &actual_name)
+                    {
+                        actual_name = renamed.to_string();
+                    }
+                    if def.local.name.as_str() != actual_name
+                        && let Some(symbol_id) = def.local.symbol_id.get()
+                    {
+                        import_renames.insert(symbol_id, actual_name);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Determine the action for a single statement (inclusion decision only).
