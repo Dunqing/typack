@@ -8,10 +8,10 @@ use oxc_syntax::symbol::{SymbolFlags, SymbolId};
 use rustc_hash::FxHashSet;
 
 use crate::helpers::collect_statement_declaration_names;
-use crate::scan_stage::ScanResult;
+use crate::scan_stage::ScanStageOutput;
 use crate::types::{ExportSource, Module, ModuleIdx};
 
-use super::types::RenamePlan;
+use super::types::CanonicalNames;
 
 struct SymbolCandidate {
     module_idx: ModuleIdx,
@@ -27,25 +27,26 @@ struct ModuleRenameData {
     non_exported_fallback_names: Vec<String>,
 }
 
-/// Build a semantic rename plan for conflicting declaration names across modules.
+/// Build canonical names for conflicting declaration names across modules.
 ///
 /// Uses a two-pass approach:
 /// 1. Register exported names in entry re-export order (priority order).
 /// 2. Register non-exported names in reverse module order.
-pub fn build_rename_plan(scan_result: &ScanResult<'_>) -> RenamePlan {
-    let mut rename_plan = RenamePlan::default();
+pub fn build_canonical_names(scan_result: &ScanStageOutput<'_>) -> CanonicalNames {
+    let mut canonical_names = CanonicalNames::with_module_count(scan_result.module_table.len());
 
-    reserve_synthetic_helper_names(scan_result, &mut rename_plan.used_names);
+    reserve_synthetic_helper_names(scan_result, &mut canonical_names.used_names);
 
     let mut module_data: Vec<ModuleRenameData> = Vec::new();
-    for module in &scan_result.modules {
-        module_data.push(build_module_rename_data(module));
+    for module in &scan_result.module_table {
+        module_data.push(build_module_rename_data(module, &scan_result.ast_table[module.idx].body));
     }
 
     // Pass 1: Register exported names in entry re-export order.
     // The entry module's re-export order determines which module's exports get priority.
-    let entry = &scan_result.modules[scan_result.entry_idx];
-    let entry_re_export_order = collect_re_export_module_order(entry);
+    let entry = &scan_result.module_table[scan_result.entry_points[0]];
+    let entry_re_export_order =
+        collect_re_export_module_order(entry, &scan_result.ast_table[entry.idx].body);
     let entry_re_export_set: FxHashSet<ModuleIdx> = entry_re_export_order.iter().copied().collect();
 
     // Process exported names from modules in entry re-export order
@@ -54,13 +55,13 @@ pub fn build_rename_plan(scan_result: &ScanResult<'_>) -> RenamePlan {
             register_symbol_candidates(
                 &module_data.exported_symbols,
                 scan_result,
-                &mut rename_plan,
+                &mut canonical_names,
             );
             register_fallback_names(
                 module_data.module_idx,
                 &module_data.exported_fallback_names,
                 scan_result,
-                &mut rename_plan,
+                &mut canonical_names,
             );
         }
     }
@@ -73,13 +74,13 @@ pub fn build_rename_plan(scan_result: &ScanResult<'_>) -> RenamePlan {
             register_symbol_candidates(
                 &module_data.exported_symbols,
                 scan_result,
-                &mut rename_plan,
+                &mut canonical_names,
             );
             register_fallback_names(
                 module_data.module_idx,
                 &module_data.exported_fallback_names,
                 scan_result,
-                &mut rename_plan,
+                &mut canonical_names,
             );
         }
     }
@@ -91,21 +92,21 @@ pub fn build_rename_plan(scan_result: &ScanResult<'_>) -> RenamePlan {
         register_symbol_candidates(
             &module_data.non_exported_symbols,
             scan_result,
-            &mut rename_plan,
+            &mut canonical_names,
         );
         register_fallback_names(
             module_data.module_idx,
             &module_data.non_exported_fallback_names,
             scan_result,
-            &mut rename_plan,
+            &mut canonical_names,
         );
     }
 
-    rename_plan
+    canonical_names
 }
 
-fn build_module_rename_data(module: &Module<'_>) -> ModuleRenameData {
-    let (exported_names, non_exported_names) = classify_declaration_names(module);
+fn build_module_rename_data(module: &Module<'_>, body: &[Statement<'_>]) -> ModuleRenameData {
+    let (exported_names, non_exported_names) = classify_declaration_names(module, body);
     let (exported_symbols, exported_fallback_names) =
         resolve_symbol_candidates(module, &exported_names);
     let (non_exported_symbols, non_exported_fallback_names) =
@@ -159,14 +160,14 @@ fn resolve_symbol_candidates(
 
 fn register_symbol_candidates(
     candidates: &[SymbolCandidate],
-    scan_result: &ScanResult<'_>,
-    rename_plan: &mut RenamePlan,
+    scan_result: &ScanStageOutput<'_>,
+    canonical_names: &mut CanonicalNames,
 ) {
     for candidate in candidates {
-        let module = &scan_result.modules[candidate.module_idx];
+        let module = &scan_result.module_table[candidate.module_idx];
         let chosen_name = allocate_name(
             &candidate.name,
-            &mut rename_plan.used_names,
+            &mut canonical_names.used_names,
             |candidate_name, is_original| {
                 if is_original {
                     return true;
@@ -175,7 +176,7 @@ fn register_symbol_candidates(
             },
         );
         if chosen_name != candidate.name {
-            rename_plan.insert_symbol_rename(
+            canonical_names.insert_symbol_rename(
                 candidate.module_idx,
                 candidate.symbol_id,
                 chosen_name,
@@ -187,20 +188,20 @@ fn register_symbol_candidates(
 fn register_fallback_names(
     module_idx: ModuleIdx,
     names: &[String],
-    scan_result: &ScanResult<'_>,
-    rename_plan: &mut RenamePlan,
+    scan_result: &ScanStageOutput<'_>,
+    canonical_names: &mut CanonicalNames,
 ) {
-    let module = &scan_result.modules[module_idx];
+    let module = &scan_result.module_table[module_idx];
     for name in names {
         let chosen_name =
-            allocate_name(name, &mut rename_plan.used_names, |candidate_name, is_original| {
+            allocate_name(name, &mut canonical_names.used_names, |candidate_name, is_original| {
                 if is_original {
                     return true;
                 }
                 !has_nested_scope_binding(module, candidate_name)
             });
         if chosen_name != *name {
-            rename_plan.fallback_name_renames.insert((module_idx, name.clone()), chosen_name);
+            canonical_names.fallback_name_renames.insert((module_idx, name.clone()), chosen_name);
         }
     }
 }
@@ -238,11 +239,11 @@ fn has_nested_scope_binding(module: &Module<'_>, name: &str) -> bool {
 }
 
 fn reserve_synthetic_helper_names(
-    scan_result: &ScanResult<'_>,
+    scan_result: &ScanStageOutput<'_>,
     used_names: &mut FxHashSet<String>,
 ) {
     used_names.insert("export_default".to_string());
-    for module in &scan_result.modules {
+    for module in &scan_result.module_table {
         let stem = module.path.file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("mod");
         let safe_stem = stem.cow_replace(&['-', '.'][..], "_");
         used_names.insert(format!("{safe_stem}_exports"));
@@ -255,7 +256,10 @@ fn reserve_synthetic_helper_names(
 /// Uses the pre-computed `export_import_info` for the exported set (avoiding a full
 /// AST walk), but still walks the AST for non-exported bare declarations since those
 /// aren't tracked in the export/import maps.
-fn classify_declaration_names(module: &Module<'_>) -> (Vec<String>, Vec<String>) {
+fn classify_declaration_names(
+    module: &Module<'_>,
+    body: &[Statement<'_>],
+) -> (Vec<String>, Vec<String>) {
     let info = &module.export_import_info;
 
     // Exported names: local declarations + default export local names.
@@ -282,7 +286,7 @@ fn classify_declaration_names(module: &Module<'_>) -> (Vec<String>, Vec<String>)
     // Still requires an AST walk since these aren't tracked in export_import_info.
     let mut non_exported: Vec<String> = Vec::new();
     let mut seen_non_exported: FxHashSet<String> = FxHashSet::default();
-    for stmt in &module.program.body {
+    for stmt in body {
         // Skip export statements — those are already handled above.
         if matches!(
             stmt,
@@ -311,9 +315,9 @@ fn classify_declaration_names(module: &Module<'_>) -> (Vec<String>, Vec<String>)
 ///
 /// This still walks the AST because the statement order determines rename priority,
 /// and `FxHashMap` doesn't preserve insertion order.
-fn collect_re_export_module_order(entry: &Module<'_>) -> Vec<ModuleIdx> {
+fn collect_re_export_module_order(entry: &Module<'_>, body: &[Statement<'_>]) -> Vec<ModuleIdx> {
     let mut order = Vec::new();
-    for stmt in &entry.program.body {
+    for stmt in body {
         let source_specifier = match stmt {
             Statement::ExportNamedDeclaration(decl) => {
                 decl.source.as_ref().map(|s| s.value.to_string())

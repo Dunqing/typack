@@ -7,12 +7,13 @@ use oxc_ast::ast::{
     TSModuleReference, TSType, TSTypeName, TSTypeQuery, TSTypeQueryExprName,
 };
 use oxc_ast_visit::Visit;
+use oxc_index::IndexVec;
 use oxc_span::Ident;
 use oxc_syntax::symbol::SymbolId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::helpers::collect_statement_declaration_names;
-use crate::scan_stage::ScanResult;
+use crate::scan_stage::ScanStageOutput;
 use crate::types::{ExportSource, ImportBindingKind, Module, ModuleIdx};
 
 use super::exports::{
@@ -51,24 +52,22 @@ struct ModuleExpansion {
 
 /// Precomputed data shared across all entries for tree-shaking analysis.
 pub struct NeededNamesCtx {
-    declaration_graphs: FxHashMap<ModuleIdx, Vec<DeclarationNode>>,
-    root_names: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    declaration_graphs: IndexVec<ModuleIdx, Vec<DeclarationNode>>,
+    root_names: IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 }
 
 impl NeededNamesCtx {
-    pub fn new(scan_result: &ScanResult<'_>) -> Self {
+    pub fn new(scan_result: &ScanStageOutput<'_>) -> Self {
         let declaration_graphs = build_declaration_graphs(scan_result);
-        let root_names: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>> = scan_result
-            .modules
+        let root_names: IndexVec<ModuleIdx, FxHashMap<SymbolId, String>> = scan_result
+            .module_table
             .iter()
             .map(|m| {
-                let map: FxHashMap<SymbolId, String> = m
-                    .scoping
+                m.scoping
                     .get_bindings(m.scoping.root_scope_id())
                     .into_iter()
                     .map(|(name, &sid)| (sid, name.to_string()))
-                    .collect();
-                (m.idx, map)
+                    .collect()
             })
             .collect();
         Self { declaration_graphs, root_names }
@@ -80,7 +79,10 @@ impl NeededNamesCtx {
 /// Convenience wrapper that creates a fresh [`NeededNamesCtx`] internally.
 /// Prefer [`build_needed_names_with_ctx`] when processing multiple entries.
 #[cfg(test)]
-pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> NeededNamesPlan {
+pub fn build_needed_names(
+    entry: &Module<'_>,
+    scan_result: &ScanStageOutput<'_>,
+) -> NeededNamesPlan {
     let ctx = NeededNamesCtx::new(scan_result);
     build_needed_names_with_ctx(entry, scan_result, &ctx)
 }
@@ -88,7 +90,7 @@ pub fn build_needed_names(entry: &Module<'_>, scan_result: &ScanResult<'_>) -> N
 /// Builds the tree-shaking plan using precomputed shared context.
 pub fn build_needed_names_with_ctx(
     entry: &Module<'_>,
-    scan_result: &ScanResult<'_>,
+    scan_result: &ScanStageOutput<'_>,
     ctx: &NeededNamesCtx,
 ) -> NeededNamesPlan {
     let declaration_graphs = &ctx.declaration_graphs;
@@ -111,7 +113,7 @@ pub fn build_needed_names_with_ctx(
     );
     propagate_entry_retained_dependencies(
         entry,
-        declaration_graphs.get(&entry.idx).map_or(&[], Vec::as_slice),
+        declaration_graphs[entry.idx].as_slice(),
         scan_result,
         &mut needed_names,
         &mut needed_exports,
@@ -139,7 +141,7 @@ pub fn build_needed_names_with_ctx(
         let mut export_additions: Vec<(ModuleIdx, String, NeededReason)> = Vec::new();
         let mut whole_additions: Vec<(ModuleIdx, NeededReason)> = Vec::new();
 
-        for module in &scan_result.modules {
+        for module in &scan_result.module_table {
             if module.idx == entry.idx {
                 continue;
             }
@@ -153,7 +155,7 @@ pub fn build_needed_names_with_ctx(
 
             let expansion = expand_module_graph(
                 module,
-                declaration_graphs.get(&module.idx).map_or(&[], Vec::as_slice),
+                declaration_graphs[module.idx].as_slice(),
                 direct_needed,
                 is_whole,
                 symbol_kinds.get(&module.idx).and_then(|entry| entry.as_ref()),
@@ -241,7 +243,9 @@ pub fn build_needed_names_with_ctx(
 
     let mut map: FxHashMap<ModuleIdx, Option<FxHashSet<SymbolId>>> = FxHashMap::default();
     for (&module_idx, symbols) in &needed_names {
-        if whole_modules.contains(&module_idx) || scan_result.modules[module_idx].has_augmentation {
+        if whole_modules.contains(&module_idx)
+            || scan_result.module_table[module_idx].has_augmentation
+        {
             map.insert(module_idx, None);
             symbol_kinds.insert(module_idx, None);
         } else {
@@ -256,12 +260,12 @@ pub fn build_needed_names_with_ctx(
 /// Seeds the needed names with symbols exported from the entry module.
 fn seed_entry_exports(
     entry: &Module<'_>,
-    scan_result: &ScanResult<'_>,
+    scan_result: &ScanStageOutput<'_>,
     needed_names: &mut FxHashMap<ModuleIdx, FxHashSet<SymbolId>>,
     needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     whole_modules: &mut FxHashSet<ModuleIdx>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
-    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    root_names: &IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) {
     let entry_info = &entry.export_import_info;
 
@@ -269,7 +273,7 @@ fn seed_entry_exports(
         if let ExportSource::SourceReexport { specifier, imported_name } = &export_entry.source
             && let Some(target_idx) = entry.resolve_internal_specifier(specifier)
         {
-            let target_module = &scan_result.modules[target_idx];
+            let target_module = &scan_result.module_table[target_idx];
             let name = resolve_export_local_name(target_module, imported_name)
                 .unwrap_or_else(|| imported_name.clone());
             add_needed_name(
@@ -313,8 +317,9 @@ fn seed_entry_exports(
         }
     }
 
+    let entry_body = &scan_result.ast_table[entry.idx].body;
     let mut entry_exported_names: FxHashSet<String> = FxHashSet::default();
-    for stmt in &entry.program.body {
+    for stmt in entry_body {
         match stmt {
             Statement::ExportNamedDeclaration(decl)
                 if decl.source.is_none() && decl.declaration.is_none() =>
@@ -336,7 +341,7 @@ fn seed_entry_exports(
         return;
     }
 
-    for stmt in &entry.program.body {
+    for stmt in entry_body {
         if let Statement::ImportDeclaration(import_decl) = stmt
             && let Some(target_idx) =
                 entry.resolve_internal_specifier(import_decl.source.value.as_str())
@@ -362,7 +367,7 @@ fn seed_entry_exports(
                 match spec {
                     ImportDeclarationSpecifier::ImportSpecifier(s) => {
                         let imported_name = s.imported.name().to_string();
-                        let target_module = &scan_result.modules[target_idx];
+                        let target_module = &scan_result.module_table[target_idx];
                         let local_name = resolve_export_local_name(target_module, &imported_name)
                             .unwrap_or(imported_name);
                         add_needed_name(
@@ -408,12 +413,12 @@ fn seed_entry_exports(
 fn propagate_entry_retained_dependencies(
     _entry: &Module<'_>,
     nodes: &[DeclarationNode],
-    scan_result: &ScanResult<'_>,
+    scan_result: &ScanStageOutput<'_>,
     needed_names: &mut FxHashMap<ModuleIdx, FxHashSet<SymbolId>>,
     needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     whole_modules: &mut FxHashSet<ModuleIdx>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
-    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    root_names: &IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) {
     for node in nodes {
         for dep in &node.cross_module_deps {
@@ -484,7 +489,7 @@ fn propagate_entry_retained_dependencies(
 /// module).
 pub fn compute_entry_needed_symbols(
     entry: &Module<'_>,
-    scan_result: &ScanResult<'_>,
+    scan_result: &ScanStageOutput<'_>,
 ) -> (FxHashSet<SymbolId>, FxHashMap<SymbolId, NeededKindFlags>) {
     let mut needed_symbols = FxHashSet::default();
     // Seed from locally-sourced exports only. Re-exports (`export { X } from
@@ -515,7 +520,7 @@ pub fn compute_entry_needed_symbols(
     let root_symbols: FxHashSet<SymbolId> =
         entry.scoping.get_bindings(root_scope_id).values().copied().collect();
     let mut collector = RootReferenceCollector::new(&entry.scoping, &root_symbols);
-    for stmt in &entry.program.body {
+    for stmt in &scan_result.ast_table[entry.idx].body {
         if statement_is_always_retained(stmt) {
             collector.visit_statement(stmt);
         }
@@ -535,8 +540,8 @@ fn add_namespace_requirement(
     needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
     target_idx: ModuleIdx,
-    scan_result: &ScanResult<'_>,
-    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    scan_result: &ScanStageOutput<'_>,
+    root_names: &IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) -> bool {
     let mut changed = false;
     for name in collect_all_exported_names(target_idx, scan_result) {
@@ -561,8 +566,8 @@ fn mark_module_whole_needed(
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
     module_idx: ModuleIdx,
     reason: NeededReason,
-    scan_result: &ScanResult<'_>,
-    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    scan_result: &ScanStageOutput<'_>,
+    root_names: &IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) -> bool {
     let mut changed = whole_modules.insert(module_idx);
     for name in collect_all_exported_names(module_idx, scan_result) {
@@ -584,15 +589,15 @@ fn add_needed_name(
     needed_names: &mut FxHashMap<ModuleIdx, FxHashSet<SymbolId>>,
     needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
-    scan_result: &ScanResult<'_>,
+    scan_result: &ScanStageOutput<'_>,
     module_idx: ModuleIdx,
     name: &str,
     reason: NeededReason,
-    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    root_names: &IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) -> bool {
     let inserted = needed_exports.entry(module_idx).or_default().insert(name.to_string());
     add_needed_reason(reasons, module_idx, name, reason);
-    let module = &scan_result.modules[module_idx];
+    let module = &scan_result.module_table[module_idx];
     let symbol_changed = resolve_export_symbol(module, name)
         .or_else(|| module.scoping.get_root_binding(Ident::from(name)))
         .is_some_and(|symbol_id| {
@@ -607,10 +612,10 @@ fn add_needed_symbol(
     module_idx: ModuleIdx,
     symbol_id: SymbolId,
     reason: NeededReason,
-    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    root_names: &IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) -> bool {
     let inserted = needed_names.entry(module_idx).or_default().insert(symbol_id);
-    if let Some(name) = root_names.get(&module_idx).and_then(|m| m.get(&symbol_id)) {
+    if let Some(name) = root_names[module_idx].get(&symbol_id) {
         add_needed_reason(reasons, module_idx, name, reason);
     }
     inserted
@@ -632,19 +637,19 @@ fn add_needed_reason(
 
 /// Builds per-module declaration dependency graphs for semantic expansion.
 fn build_declaration_graphs(
-    scan_result: &ScanResult<'_>,
-) -> FxHashMap<ModuleIdx, Vec<DeclarationNode>> {
+    scan_result: &ScanStageOutput<'_>,
+) -> IndexVec<ModuleIdx, Vec<DeclarationNode>> {
     scan_result
-        .modules
+        .module_table
         .iter()
-        .map(|module| (module.idx, collect_declaration_nodes(module, scan_result)))
+        .map(|module| collect_declaration_nodes(module, scan_result))
         .collect()
 }
 
 /// Collects declaration nodes for a single module, capturing local and cross-module dependencies.
 fn collect_declaration_nodes(
     module: &Module<'_>,
-    scan_result: &ScanResult<'_>,
+    scan_result: &ScanStageOutput<'_>,
 ) -> Vec<DeclarationNode> {
     let root_scope_id = module.scoping.root_scope_id();
     let root_symbols: FxHashSet<SymbolId> =
@@ -658,7 +663,7 @@ fn collect_declaration_nodes(
 
     let mut nodes = Vec::new();
 
-    for stmt in &module.program.body {
+    for stmt in &scan_result.ast_table[module.idx].body {
         let is_always_retained = statement_is_always_retained(stmt);
         let mut declared_names = Vec::new();
         collect_statement_declaration_names(stmt, &mut declared_names);
@@ -755,14 +760,14 @@ fn collect_declaration_nodes(
 
                 let target_name = match &binding.kind {
                     ImportBindingKind::Named(imported_name) => {
-                        let target_module = &scan_result.modules[target_module_idx];
+                        let target_module = &scan_result.module_table[target_module_idx];
                         Some(
                             resolve_export_local_name(target_module, imported_name)
                                 .unwrap_or_else(|| imported_name.clone()),
                         )
                     }
                     ImportBindingKind::Default => {
-                        let target_module = &scan_result.modules[target_module_idx];
+                        let target_module = &scan_result.module_table[target_module_idx];
                         Some(
                             resolve_export_local_name(target_module, "default")
                                 .unwrap_or_else(|| "default".to_string()),
@@ -881,8 +886,8 @@ fn propagate_needed_names(
     needed: &mut FxHashMap<ModuleIdx, FxHashSet<SymbolId>>,
     needed_exports: &mut FxHashMap<ModuleIdx, FxHashSet<String>>,
     reasons: &mut FxHashMap<(ModuleIdx, String), FxHashSet<NeededReason>>,
-    scan_result: &ScanResult<'_>,
-    root_names: &FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
+    scan_result: &ScanStageOutput<'_>,
+    root_names: &IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
 ) -> bool {
     use std::collections::VecDeque;
 
@@ -899,7 +904,7 @@ fn propagate_needed_names(
             continue;
         }
 
-        let module = &scan_result.modules[module_idx];
+        let module = &scan_result.module_table[module_idx];
         let info = &module.export_import_info;
         for name in &module_needed {
             if let Some(symbol_id) = resolve_export_symbol(module, name) {
@@ -926,7 +931,7 @@ fn propagate_needed_names(
             if let ExportSource::SourceReexport { specifier, imported_name } = &entry.source
                 && let Some(target_idx) = module.resolve_internal_specifier(specifier)
             {
-                let target_module = &scan_result.modules[target_idx];
+                let target_module = &scan_result.module_table[target_idx];
                 let local_name = resolve_export_local_name(target_module, imported_name)
                     .unwrap_or_else(|| imported_name.clone());
                 reexport_groups
@@ -1208,7 +1213,7 @@ fn statement_declaration_needed_kinds(stmt: &Statement<'_>) -> NeededKindFlags {
 
 struct InlineImportCollector<'m, 'a> {
     module: &'m Module<'a>,
-    scan_result: &'m ScanResult<'a>,
+    scan_result: &'m ScanStageOutput<'a>,
     deps: Vec<InlineImportDep>,
 }
 
@@ -1226,7 +1231,7 @@ impl<'a> Visit<'a> for InlineImportCollector<'_, 'a> {
         {
             let target_name = import_type.qualifier.as_ref().map(|qualifier| {
                 let exported_name = extract_qualifier_first_name(qualifier);
-                let target_module = &self.scan_result.modules[target_module_idx];
+                let target_module = &self.scan_result.module_table[target_module_idx];
                 resolve_export_local_name(target_module, &exported_name).unwrap_or(exported_name)
             });
             self.record_target(target_module_idx, target_name);
@@ -1241,7 +1246,7 @@ impl<'a> Visit<'a> for InlineImportCollector<'_, 'a> {
         {
             let target_name = import_type.qualifier.as_ref().map(|qualifier| {
                 let exported_name = extract_qualifier_first_name(qualifier);
-                let target_module = &self.scan_result.modules[target_module_idx];
+                let target_module = &self.scan_result.module_table[target_module_idx];
                 resolve_export_local_name(target_module, &exported_name).unwrap_or(exported_name)
             });
             self.record_target(target_module_idx, target_name);
@@ -1273,7 +1278,7 @@ fn extract_qualifier_first_name(qualifier: &TSImportTypeQualifier<'_>) -> String
 fn collect_inline_import_deps(
     stmt: &Statement<'_>,
     module: &Module<'_>,
-    scan_result: &ScanResult<'_>,
+    scan_result: &ScanStageOutput<'_>,
 ) -> Vec<InlineImportDep> {
     let mut collector = InlineImportCollector { module, scan_result, deps: Vec::new() };
     collector.visit_statement(stmt);

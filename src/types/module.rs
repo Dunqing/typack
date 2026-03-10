@@ -5,7 +5,6 @@
 
 use std::path::PathBuf;
 
-use oxc_ast::ast::Program;
 use oxc_index::define_index_type;
 use oxc_semantic::Scoping;
 use oxc_sourcemap::SourceMap;
@@ -28,8 +27,6 @@ pub struct Module<'a> {
     pub relative_path: String,
     /// The raw source text, allocated in the shared arena.
     pub source: &'a str,
-    /// The parsed AST.
-    pub program: Program<'a>,
     /// Scope/symbol information from semantic analysis.
     pub scoping: Scoping,
     /// Leading `/// <reference ... />` directives collected during scan.

@@ -1,6 +1,7 @@
 //! Data types for the link stage output.
 
 use oxc_diagnostics::OxcDiagnostic;
+use oxc_index::IndexVec;
 use oxc_syntax::symbol::{SymbolFlags, SymbolId};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -18,12 +19,11 @@ pub enum StatementAction {
     UnwrapExportDefault,
 }
 
-/// Per-module analysis results computed during the link stage.
-/// Contains inclusion decisions and import resolution data
-/// that the generate stage consumes.
-pub struct ModuleLinkMeta {
-    /// Per-statement actions (indexed by position in original body).
-    pub statement_actions: Vec<StatementAction>,
+/// Entry-independent per-module metadata computed once during the link stage.
+///
+/// These fields depend only on the module's AST and global canonical names,
+/// not on which entry point is being generated.
+pub struct ModuleStaticMeta {
     /// Import renames: local symbol → resolved name from source module.
     pub import_renames: FxHashMap<SymbolId, String>,
     /// Internal namespace alias symbols.
@@ -32,6 +32,50 @@ pub struct ModuleLinkMeta {
     pub external_ns_info: FxHashMap<SymbolId, (String, String)>,
     /// Names from re-exported imports that must survive pruning.
     pub reexported_import_names: FxHashSet<String>,
+}
+
+/// Per-entry per-module analysis results computed during the link stage.
+/// Contains inclusion decisions that vary by entry point.
+pub struct ModuleLinkMeta {
+    /// Per-statement actions (indexed by position in original body).
+    pub statement_actions: Vec<StatementAction>,
+    /// Whether the module needs structural AST mutations beyond simple renames.
+    /// True when the module has namespace aliases to strip or inline import
+    /// types (`import("...")`) referencing internal modules that need rewriting.
+    pub needs_structural_mutation: bool,
+}
+
+/// An import specifier collected from an external import.
+pub struct ImportSpecifier {
+    pub local: String,
+    pub kind: ImportSpecifierKind,
+}
+
+pub enum ImportSpecifierKind {
+    Namespace,
+    Default,
+    Named(String),
+}
+
+impl ImportSpecifierKind {
+    pub fn sort_key(&self) -> &str {
+        match self {
+            Self::Namespace => "*",
+            Self::Default => "default",
+            Self::Named(name) => name.as_str(),
+        }
+    }
+}
+
+/// An external import to be preserved in the output.
+pub struct ExternalImport {
+    pub source: String,
+    pub specifiers: Vec<ImportSpecifier>,
+    pub is_type_only: bool,
+    pub side_effect_only: bool,
+    /// When `true`, this import was created from an `export { ... } from "external"`
+    /// re-export and should not be pruned by the per-module tree-shaking filter.
+    pub from_reexport: bool,
 }
 
 /// An exported name with optional rename info.
@@ -52,17 +96,16 @@ pub struct NamespaceWrapInfo {
     pub export_names: Vec<ExportedName>,
 }
 
-/// Rename plan for resolving name conflicts across bundled modules.
+/// Canonical name mappings for resolving name conflicts across bundled modules.
 ///
-/// When multiple modules declare names that collide, the link stage builds a rename
-/// plan mapping old names to conflict-free alternatives (e.g. `Foo` → `Foo$1`).
+/// When multiple modules declare names that collide, the link stage builds canonical
+/// name mappings from old names to conflict-free alternatives (e.g. `Foo` → `Foo$1`).
 #[derive(Default, Clone)]
-pub struct RenamePlan {
-    /// Renames keyed by (module, symbol). Uses `SymbolId` for precise renaming
-    /// that respects scoping and avoids false matches.
-    pub symbol_renames: FxHashMap<ModuleIdx, FxHashMap<SymbolId, String>>,
-    /// Renames keyed by name string (fallback). Used when a name couldn't be
-    /// resolved to a semantic symbol (e.g. names from declaration merging).
+pub struct CanonicalNames {
+    /// Symbol-based renames grouped by module for O(1) per-module lookup.
+    per_module_symbols: IndexVec<ModuleIdx, FxHashMap<SymbolId, String>>,
+    /// Fallback name renames for when symbol resolution isn't possible
+    /// (e.g. names from declaration merging).
     pub fallback_name_renames: FxHashMap<(ModuleIdx, String), String>,
     /// Names already claimed in the output scope. Used during rename planning
     /// to detect collisions and allocate `$N` suffixes.
@@ -159,10 +202,12 @@ impl NeededNamesPlan {
 
 /// Global link-stage output computed once across all entries.
 pub struct LinkStageOutput {
-    pub rename_plan: RenamePlan,
-    pub default_export_names: FxHashMap<ModuleIdx, String>,
+    pub canonical_names: CanonicalNames,
+    pub default_export_names: IndexVec<ModuleIdx, Option<String>>,
+    /// Entry-independent per-module metadata (import renames, ns aliases, etc.).
+    pub module_static_metas: IndexVec<ModuleIdx, ModuleStaticMeta>,
     pub reserved_decl_names: FxHashSet<String>,
-    pub all_module_aliases: FxHashMap<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>>,
+    pub all_module_aliases: IndexVec<ModuleIdx, FxHashMap<SymbolId, ModuleIdx>>,
     pub warnings: Vec<OxcDiagnostic>,
 }
 
@@ -171,9 +216,9 @@ pub struct PerEntryLinkData {
     #[expect(dead_code)]
     pub needed_names_plan: NeededNamesPlan,
     /// Pre-computed per-module analysis from the link stage.
-    pub module_metas: FxHashMap<ModuleIdx, ModuleLinkMeta>,
+    pub module_metas: IndexVec<ModuleIdx, Option<ModuleLinkMeta>>,
     /// Modules that need namespace wrappers for this entry.
-    pub namespace_wraps: FxHashMap<ModuleIdx, NamespaceWrapInfo>,
+    pub namespace_wraps: IndexVec<ModuleIdx, Option<NamespaceWrapInfo>>,
     /// Entry-level `import * as X` aliases: local symbol → source module.
     pub namespace_aliases: FxHashMap<SymbolId, ModuleIdx>,
     /// Reserved declaration names (from global + namespace wrap names).
@@ -182,9 +227,17 @@ pub struct PerEntryLinkData {
     pub namespace_warnings: Vec<OxcDiagnostic>,
 }
 
-impl RenamePlan {
+impl CanonicalNames {
+    pub fn with_module_count(n: usize) -> Self {
+        Self {
+            per_module_symbols: std::iter::repeat_with(FxHashMap::default).take(n).collect(),
+            fallback_name_renames: FxHashMap::default(),
+            used_names: FxHashSet::default(),
+        }
+    }
+
     pub fn resolve_symbol(&self, module_idx: ModuleIdx, symbol_id: SymbolId) -> Option<&str> {
-        self.symbol_renames.get(&module_idx)?.get(&symbol_id).map(String::as_str)
+        self.per_module_symbols[module_idx].get(&symbol_id).map(String::as_str)
     }
 
     pub fn resolve_name(&self, module: &Module<'_>, name: &str) -> Option<&str> {
@@ -197,12 +250,13 @@ impl RenamePlan {
             })
     }
 
-    /// Get all symbol renames for a specific module.
+    /// Get all symbol renames for a specific module (O(1) lookup).
     pub fn module_symbol_renames(
         &self,
         module_idx: ModuleIdx,
     ) -> Option<&FxHashMap<SymbolId, String>> {
-        self.symbol_renames.get(&module_idx)
+        let map = &self.per_module_symbols[module_idx];
+        if map.is_empty() { None } else { Some(map) }
     }
 
     /// Insert a symbol rename for a specific module.
@@ -212,6 +266,6 @@ impl RenamePlan {
         symbol_id: SymbolId,
         new_name: String,
     ) {
-        self.symbol_renames.entry(module_idx).or_default().insert(symbol_id, new_name);
+        self.per_module_symbols[module_idx].insert(symbol_id, new_name);
     }
 }

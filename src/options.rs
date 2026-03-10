@@ -30,3 +30,27 @@ impl Default for TypackOptions {
         }
     }
 }
+
+/// Options for the generate stage of the bundling pipeline.
+///
+/// This is a subset of [`TypackOptions`] containing only the fields needed
+/// by [`Bundle::generate`](crate::Bundle::generate).
+pub struct GenerateOptions {
+    /// Working directory. Region marker paths are relative to this.
+    pub cwd: PathBuf,
+    /// Generate source map (`.d.ts.map`).
+    pub sourcemap: bool,
+    /// Emit `export =` for single default export output.
+    pub cjs_default: bool,
+}
+
+impl GenerateOptions {
+    /// Create `GenerateOptions` from the corresponding fields in [`TypackOptions`].
+    pub fn from_typack_options(options: &TypackOptions) -> Self {
+        Self {
+            cwd: options.cwd.clone(),
+            sourcemap: options.sourcemap,
+            cjs_default: options.cjs_default,
+        }
+    }
+}

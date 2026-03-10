@@ -14,23 +14,23 @@ use super::types::{
 };
 use crate::link_stage::exports::{find_external_reexport_source, resolve_export_origin};
 use crate::link_stage::{LinkStageOutput, ModuleLinkMeta, PerEntryLinkData, StatementAction};
-use crate::scan_stage::ScanResult;
+use crate::scan_stage::ScanStageOutput;
 use crate::types::ModuleIdx;
 
 /// Output collection phase: walks the original AST using pre-computed
 /// per-statement actions from the link stage, and collects exports, imports,
 /// star exports directly into `acc`.
 pub(super) fn collect_module_outputs(
-    scan_result: &ScanResult,
+    scan_result: &ScanStageOutput,
     module_idx: ModuleIdx,
     meta: &ModuleLinkMeta,
     per_entry: &PerEntryLinkData,
     link_output: &LinkStageOutput,
     acc: &mut GenerateAcc,
 ) {
-    let module = &scan_result.modules[module_idx];
+    let module = &scan_result.module_table[module_idx];
 
-    for (i, stmt) in module.program.body.iter().enumerate() {
+    for (i, stmt) in scan_result.ast_table[module_idx].body.iter().enumerate() {
         collect_statement_outputs(
             scan_result,
             stmt,
@@ -46,7 +46,7 @@ pub(super) fn collect_module_outputs(
 /// Collect output metadata (exports, imports, star exports) for a single
 /// statement, using the pre-computed action from the link stage.
 fn collect_statement_outputs<'a>(
-    scan_result: &ScanResult,
+    scan_result: &ScanStageOutput,
     stmt: &Statement<'a>,
     action: &StatementAction,
     module: &crate::types::Module<'a>,
@@ -66,7 +66,7 @@ fn collect_statement_outputs<'a>(
                     collect_declaration_names(decl, &mut acc.exports);
                     for exp in &mut acc.exports[before_len..] {
                         if let Some(new_name) =
-                            link_output.rename_plan.resolve_name(module, &exp.local)
+                            link_output.canonical_names.resolve_name(module, &exp.local)
                         {
                             exp.local = new_name.to_string();
                         }
@@ -136,14 +136,14 @@ fn collect_statement_outputs<'a>(
                             }
                             if local_name == "default"
                                 && let Some(name) =
-                                    link_output.default_export_names.get(&local_module_idx)
+                                    link_output.default_export_names[local_module_idx].as_ref()
                             {
                                 local_name.clone_from(name);
                             }
-                            if let Some(new_name) = link_output
-                                .rename_plan
-                                .resolve_name(&scan_result.modules[local_module_idx], &local_name)
-                            {
+                            if let Some(new_name) = link_output.canonical_names.resolve_name(
+                                &scan_result.module_table[local_module_idx],
+                                &local_name,
+                            ) {
                                 local_name = new_name.to_string();
                             }
                             acc.exports.push(ExportedName {
@@ -175,7 +175,8 @@ fn collect_statement_outputs<'a>(
                         if let Some(symbol_id) = symbol_id
                             && let Some(source_module_idx) =
                                 per_entry.namespace_aliases.get(&symbol_id)
-                            && let Some(wrap) = per_entry.namespace_wraps.get(source_module_idx)
+                            && let Some(wrap) =
+                                per_entry.namespace_wraps[*source_module_idx].as_ref()
                         {
                             acc.exports.push(ExportedName {
                                 local: wrap.namespace_name.clone(),
@@ -187,7 +188,7 @@ fn collect_statement_outputs<'a>(
                             collect_export_specifier(spec, &mut acc.exports, spec_is_type);
                             for exp in &mut acc.exports[before_len..] {
                                 if let Some(new_name) =
-                                    link_output.rename_plan.resolve_name(module, &exp.local)
+                                    link_output.canonical_names.resolve_name(module, &exp.local)
                                 {
                                     exp.local = new_name.to_string();
                                 }
@@ -263,7 +264,7 @@ fn collect_statement_outputs<'a>(
                 let name = exported.name().to_string();
                 if let Some(source_module_idx) = internal_source_idx {
                     if module.is_entry
-                        && let Some(wrap) = per_entry.namespace_wraps.get(&source_module_idx)
+                        && let Some(wrap) = per_entry.namespace_wraps[source_module_idx].as_ref()
                     {
                         acc.exports.push(ExportedName {
                             local: wrap.namespace_name.clone(),
@@ -305,8 +306,8 @@ fn collect_statement_outputs<'a>(
                     acc.imports.extend(star_external_imports);
                     for exp in &mut acc.exports[before_len..] {
                         if let Some(new_name) = link_output
-                            .rename_plan
-                            .resolve_name(&scan_result.modules[source_module_idx], &exp.local)
+                            .canonical_names
+                            .resolve_name(&scan_result.module_table[source_module_idx], &exp.local)
                         {
                             exp.local = new_name.to_string();
                         }

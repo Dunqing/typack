@@ -4,9 +4,10 @@
 //! Inspired by `oxc_module_graph`'s `build_resolved_exports` algorithm.
 
 use oxc_diagnostics::OxcDiagnostic;
+use oxc_index::IndexVec;
 use rustc_hash::FxHashMap;
 
-use crate::scan_stage::ScanResult;
+use crate::scan_stage::ScanStageOutput;
 use crate::types::{ExportSource, ModuleIdx};
 
 /// The resolved origin of an exported name.
@@ -28,14 +29,16 @@ type ModuleResolvedExports = FxHashMap<String, ResolvedExport>;
 /// For each module, follows re-export chains (`export { X } from` and `export * from`)
 /// to determine where each exported name ultimately comes from. Detects ambiguity
 /// when multiple `export *` sources provide the same name.
-pub fn build_resolved_exports(scan_result: &ScanResult<'_>) -> Vec<OxcDiagnostic> {
-    let mut resolved: FxHashMap<ModuleIdx, ModuleResolvedExports> = FxHashMap::default();
+pub fn build_resolved_exports(scan_result: &ScanStageOutput<'_>) -> Vec<OxcDiagnostic> {
+    let module_count = scan_result.module_table.len();
+    let mut resolved: IndexVec<ModuleIdx, Option<ModuleResolvedExports>> =
+        std::iter::repeat_n(None, module_count).collect();
     let mut warnings: Vec<OxcDiagnostic> = Vec::new();
 
     // Process modules in topological order (dependencies before dependents).
     // This ensures that when we resolve a re-export chain, the source module's
     // resolved exports are already available.
-    for module in &scan_result.modules {
+    for module in &scan_result.module_table {
         let info = &module.export_import_info;
         let mut module_resolved: ModuleResolvedExports = FxHashMap::default();
 
@@ -67,7 +70,7 @@ pub fn build_resolved_exports(scan_result: &ScanResult<'_>) -> Vec<OxcDiagnostic
                 ExportSource::SourceReexport { specifier, imported_name } => {
                     // Follow the chain to the source module's resolved exports.
                     if let Some(target_idx) = module.resolve_internal_specifier(specifier)
-                        && let Some(target_resolved) = resolved.get(&target_idx)
+                        && let Some(target_resolved) = resolved[target_idx].as_ref()
                         && let Some(origin) = target_resolved.get(imported_name)
                     {
                         module_resolved.insert(
@@ -102,7 +105,7 @@ pub fn build_resolved_exports(scan_result: &ScanResult<'_>) -> Vec<OxcDiagnostic
             let Some(target_idx) = module.resolve_internal_specifier(&star.specifier) else {
                 continue;
             };
-            let Some(target_resolved) = resolved.get(&target_idx) else {
+            let Some(target_resolved) = resolved[target_idx].as_ref() else {
                 continue;
             };
 
@@ -129,8 +132,8 @@ pub fn build_resolved_exports(scan_result: &ScanResult<'_>) -> Vec<OxcDiagnostic
                     }
                     warnings.push(OxcDiagnostic::warn(format!(
                         "Ambiguous star export: \"{name}\" is provided by both module {} and module {} via `export *`",
-                        scan_result.modules[prev_source].relative_path,
-                        scan_result.modules[target_idx].relative_path,
+                        scan_result.module_table[prev_source].relative_path,
+                        scan_result.module_table[target_idx].relative_path,
                     )).with_help(format!(
                         "Add an explicit `export {{ {name} }} from \"...\"` to resolve the ambiguity",
                     )));
@@ -157,7 +160,7 @@ pub fn build_resolved_exports(scan_result: &ScanResult<'_>) -> Vec<OxcDiagnostic
             }
             if let ExportSource::SourceReexport { specifier, imported_name } = &entry.source
                 && let Some(target_idx) = module.resolve_internal_specifier(specifier)
-                && let Some(target_resolved) = resolved.get(&target_idx)
+                && let Some(target_resolved) = resolved[target_idx].as_ref()
                 && let Some(origin) = target_resolved.get(imported_name)
             {
                 module_resolved.insert(
@@ -171,7 +174,7 @@ pub fn build_resolved_exports(scan_result: &ScanResult<'_>) -> Vec<OxcDiagnostic
             }
         }
 
-        resolved.insert(module.idx, module_resolved);
+        resolved[module.idx] = Some(module_resolved);
     }
 
     warnings

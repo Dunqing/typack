@@ -18,7 +18,7 @@ use oxc_span::SourceType;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::options::TypackOptions;
-use crate::types::{Module, ModuleIdx};
+use crate::types::{AstTable, Module, ModuleIdx, ModuleTable};
 
 use self::collectors::{
     ModuleDependencyHints, collect_export_import_info, collect_leading_reference_directives,
@@ -31,13 +31,13 @@ use self::resolution::{
 };
 
 /// Result of scanning: the module graph.
-pub struct ScanResult<'a> {
+pub struct ScanStageOutput<'a> {
     /// All discovered modules, indexed by `ModuleIdx`.
-    pub modules: IndexVec<ModuleIdx, Module<'a>>,
-    /// Index of the primary entry module (for backward compatibility).
-    pub entry_idx: ModuleIdx,
+    pub module_table: ModuleTable<'a>,
+    /// Parsed ASTs for each module, indexed by `ModuleIdx`.
+    pub ast_table: AstTable<'a>,
     /// All entry module indices.
-    pub entry_indices: Vec<ModuleIdx>,
+    pub entry_points: Vec<ModuleIdx>,
     /// Non-fatal warnings collected during resolution/classification.
     pub warnings: Vec<OxcDiagnostic>,
 }
@@ -58,8 +58,9 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
     /// # Errors
     ///
     /// Returns `Err` with diagnostics if entry files cannot be read or parsed.
-    pub fn scan(&self) -> Result<ScanResult<'a>, Vec<OxcDiagnostic>> {
+    pub fn scan(&self) -> Result<ScanStageOutput<'a>, Vec<OxcDiagnostic>> {
         let mut modules: IndexVec<ModuleIdx, Module<'a>> = IndexVec::new();
+        let mut ast_table = AstTable::new();
         // Map canonical path → module index for deduplication
         let mut path_to_idx: FxHashMap<PathBuf, ModuleIdx> = FxHashMap::default();
         // Per-module dependency hints collected once during parse.
@@ -89,6 +90,7 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
                 &entry_path,
                 true,
                 &mut modules,
+                &mut ast_table,
                 &mut path_to_idx,
                 &mut module_hints,
             )?;
@@ -134,6 +136,7 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
                                 &canonical,
                                 false,
                                 &mut modules,
+                                &mut ast_table,
                                 &mut path_to_idx,
                                 &mut module_hints,
                             )?
@@ -181,6 +184,7 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
                                 &canonical,
                                 false,
                                 &mut modules,
+                                &mut ast_table,
                                 &mut path_to_idx,
                                 &mut module_hints,
                             )?
@@ -234,14 +238,18 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
             old_to_new.insert(old_idx, ModuleIdx::from_usize(new_idx));
         }
 
-        // Rebuild modules in topological order.
+        // Rebuild modules and ast_table in topological order.
         // Convert IndexVec to Vec to allow taking ownership of individual elements.
         let mut module_vec: Vec<Option<Module<'a>>> = modules.into_iter().map(Some).collect();
+        let mut ast_vec: Vec<Option<oxc_ast::ast::Program<'a>>> =
+            ast_table.into_raw_vec().into_iter().map(Some).collect();
         let mut sorted_modules: IndexVec<ModuleIdx, Module<'a>> = IndexVec::new();
-        let mut new_entry_indices = Vec::new();
+        let mut sorted_ast: IndexVec<ModuleIdx, oxc_ast::ast::Program<'a>> = IndexVec::new();
+        let mut entry_points = Vec::new();
         for old_idx in topo_result.order {
             // Safe: topological_sort visits each index exactly once via its visited set.
             let mut module = module_vec[old_idx.index()].take().unwrap();
+            let program = ast_vec[old_idx.index()].take().unwrap();
             let new_idx = ModuleIdx::from_usize(sorted_modules.len());
 
             let mut resolved_internal_specifiers: FxHashMap<String, ModuleIdx> =
@@ -261,6 +269,7 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
 
             let pushed_idx = sorted_modules.push(module);
             debug_assert_eq!(pushed_idx, new_idx);
+            sorted_ast.push(program);
         }
 
         let mut seen_entries = FxHashSet::default();
@@ -268,18 +277,18 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
             if let Some(&new_entry_idx) = old_to_new.get(&old_entry_idx)
                 && seen_entries.insert(new_entry_idx)
             {
-                new_entry_indices.push(new_entry_idx);
+                entry_points.push(new_entry_idx);
             }
         }
 
-        let entry_idx = *new_entry_indices
-            .first()
-            .ok_or_else(|| vec![OxcDiagnostic::error("No entry modules found after scan")])?;
+        if entry_points.is_empty() {
+            return Err(vec![OxcDiagnostic::error("No entry modules found after scan")]);
+        }
 
-        Ok(ScanResult {
-            modules: sorted_modules,
-            entry_idx,
-            entry_indices: new_entry_indices,
+        Ok(ScanStageOutput {
+            module_table: ModuleTable::from_raw_parts(sorted_modules),
+            ast_table: AstTable::from_raw_parts(sorted_ast),
+            entry_points,
             warnings,
         })
     }
@@ -290,6 +299,7 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
         path: &Path,
         is_entry: bool,
         modules: &mut IndexVec<ModuleIdx, Module<'a>>,
+        ast_table: &mut AstTable<'a>,
         path_to_idx: &mut FxHashMap<PathBuf, ModuleIdx>,
         module_hints: &mut FxHashMap<ModuleIdx, ModuleDependencyHints>,
     ) -> Result<ModuleIdx, Vec<OxcDiagnostic>> {
@@ -342,7 +352,6 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
             path: path.to_path_buf(),
             relative_path,
             source,
-            program,
             scoping,
             reference_directives,
             has_augmentation,
@@ -352,6 +361,8 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
             input_sourcemap,
             export_import_info,
         });
+        let ast_idx = ast_table.push(program);
+        debug_assert_eq!(ast_idx, module_idx);
         path_to_idx.insert(path.to_path_buf(), module_idx);
         module_hints.insert(module_idx, hints);
         Ok(module_idx)

@@ -5,7 +5,7 @@
 
 use rustc_hash::FxHashSet;
 
-use crate::scan_stage::ScanResult;
+use crate::scan_stage::ScanStageOutput;
 use crate::types::{ExportSource, Module, ModuleIdx};
 
 /// Collect all exported names from a module, including both declaration exports
@@ -13,9 +13,9 @@ use crate::types::{ExportSource, Module, ModuleIdx};
 /// Returns the LOCAL names (the names used in declarations within the module).
 pub fn collect_all_exported_names(
     module_idx: ModuleIdx,
-    scan_result: &ScanResult<'_>,
+    scan_result: &ScanStageOutput<'_>,
 ) -> FxHashSet<String> {
-    let info = &scan_result.modules[module_idx].export_import_info;
+    let info = &scan_result.module_table[module_idx].export_import_info;
     info.named_exports
         .iter()
         .map(|(exported_name, entry)| {
@@ -43,9 +43,9 @@ pub fn collect_all_exported_names(
 /// so `export { Internal as Public }` contributes `Public`.
 pub fn collect_public_exported_names(
     module_idx: ModuleIdx,
-    scan_result: &ScanResult<'_>,
+    scan_result: &ScanStageOutput<'_>,
 ) -> FxHashSet<String> {
-    let info = &scan_result.modules[module_idx].export_import_info;
+    let info = &scan_result.module_table[module_idx].export_import_info;
     info.named_exports
         .keys()
         .filter(|name| {
@@ -65,9 +65,9 @@ pub fn collect_public_exported_names(
 pub fn find_external_reexport_source(
     module_idx: ModuleIdx,
     exported_name: &str,
-    scan_result: &ScanResult<'_>,
+    scan_result: &ScanStageOutput<'_>,
 ) -> Option<(String, String)> {
-    let module = &scan_result.modules[module_idx];
+    let module = &scan_result.module_table[module_idx];
     let info = &module.export_import_info;
 
     let entry = info.named_exports.get(exported_name)?;
@@ -106,19 +106,19 @@ pub fn resolve_export_local_name(module: &Module<'_>, exported_name: &str) -> Op
 pub fn resolve_export_origin(
     module_idx: ModuleIdx,
     exported_name: &str,
-    scan_result: &ScanResult<'_>,
+    scan_result: &ScanStageOutput<'_>,
 ) -> Option<(ModuleIdx, String)> {
     fn inner(
         module_idx: ModuleIdx,
         exported_name: &str,
-        scan_result: &ScanResult<'_>,
+        scan_result: &ScanStageOutput<'_>,
         seen: &mut FxHashSet<(ModuleIdx, String)>,
     ) -> Option<(ModuleIdx, String)> {
         if !seen.insert((module_idx, exported_name.to_string())) {
             return None;
         }
 
-        let module = &scan_result.modules[module_idx];
+        let module = &scan_result.module_table[module_idx];
         if let Some(entry) = module.export_import_info.named_exports.get(exported_name) {
             return match &entry.source {
                 ExportSource::LocalDeclaration
@@ -155,9 +155,9 @@ pub fn resolve_export_origin(
 /// For `export default function bar() {}`, returns `Some("bar")`.
 pub fn resolve_default_export_name(
     module_idx: ModuleIdx,
-    scan_result: &ScanResult<'_>,
+    scan_result: &ScanStageOutput<'_>,
 ) -> Option<String> {
-    let info = &scan_result.modules[module_idx].export_import_info;
+    let info = &scan_result.module_table[module_idx].export_import_info;
     let entry = info.named_exports.get("default")?;
     Some(entry.local_name.clone())
 }
