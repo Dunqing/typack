@@ -28,7 +28,10 @@ Typack follows Rolldown's three-stage architecture:
   Bundled .d.ts + sourcemap (one per entry)
 ```
 
-Each stage has well-defined inputs and outputs. Data flows forward only — no stage reaches back to modify an earlier stage's output (except generate's `TakeIn` optimization for single-entry, described below).
+Each stage has well-defined inputs and outputs. Data flows forward only — no stage reaches back to modify an earlier stage's output, with two exceptions:
+
+- **Single-entry `TakeIn`**: the generate stage takes ownership of AST statements to avoid cloning (described below).
+- **Multi-entry pre-rename**: the generate stage permanently mutates AST binding identifiers via `pre_apply_global_renames` before per-entry generation, since canonical/import renames are global.
 
 ---
 

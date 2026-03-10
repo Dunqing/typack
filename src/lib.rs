@@ -85,8 +85,8 @@ impl<'a> Bundle<'a> {
         assert!(!self.generated, "Bundle::generate can only be called once");
         self.generated = true;
 
-        let mut all_warnings: Vec<OxcDiagnostic> = self.scan_output.warnings.clone();
-        all_warnings.extend(self.link_output.warnings.iter().cloned());
+        let mut all_warnings = std::mem::take(&mut self.scan_output.warnings);
+        all_warnings.extend(std::mem::take(&mut self.link_output.warnings));
 
         // Pre-compute data that needs to read ast_table before we hand out &mut access.
         let unique_directives = collect_unique_directives(&self.scan_output);
