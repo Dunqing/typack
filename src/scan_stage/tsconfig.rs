@@ -10,10 +10,13 @@ pub struct IsolatedDeclarationsConfig {
 
 impl IsolatedDeclarationsConfig {
     /// Load config from an explicit tsconfig.json path.
-    /// Returns `None` if the file cannot be read.
-    pub fn load(path: &Path) -> Option<Self> {
-        let content = std::fs::read_to_string(path).ok()?;
-        Some(Self::parse(&content))
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read.
+    pub fn load(path: &Path) -> Result<Self, std::io::Error> {
+        let content = std::fs::read_to_string(path)?;
+        Ok(Self::parse(&content))
     }
 
     /// Find tsconfig.json by walking up from `start_dir` and extract relevant fields.
@@ -27,10 +30,12 @@ impl IsolatedDeclarationsConfig {
     /// Parse tsconfig.json content (with comments stripped) to extract relevant fields.
     fn parse(content: &str) -> Self {
         let stripped = strip_json_comments(content);
-        // Use a simple approach: look for the field values in the JSON
+        // Scope the search to the "compilerOptions" block to avoid false positives
+        // from other top-level keys.
+        let compiler_options = extract_compiler_options(&stripped);
         let isolated_declarations =
-            find_bool_field(&stripped, "isolatedDeclarations").unwrap_or(false);
-        let strip_internal = find_bool_field(&stripped, "stripInternal").unwrap_or(false);
+            find_bool_field(compiler_options, "isolatedDeclarations").unwrap_or(false);
+        let strip_internal = find_bool_field(compiler_options, "stripInternal").unwrap_or(false);
         Self { isolated_declarations, strip_internal }
     }
 }
@@ -133,14 +138,57 @@ fn strip_json_comments(input: &str) -> String {
     cleaned
 }
 
+/// Extract the `"compilerOptions": { ... }` block from JSON text.
+/// Returns the substring containing the block's contents, or the full
+/// input if `compilerOptions` is not found (graceful fallback).
+fn extract_compiler_options(json: &str) -> &str {
+    let key = "\"compilerOptions\"";
+    let Some(pos) = json.find(key) else {
+        return json;
+    };
+    let after_key = &json[pos + key.len()..];
+    let after_key = after_key.trim_start();
+    let Some(after_colon) = after_key.strip_prefix(':') else {
+        return json;
+    };
+    let after_colon = after_colon.trim_start();
+    let Some(block_start) = after_colon.strip_prefix('{') else {
+        return json;
+    };
+    // Find the matching closing brace, respecting nesting
+    let mut depth = 1u32;
+    let mut in_string = false;
+    for (i, b) in block_start.bytes().enumerate() {
+        if in_string {
+            if b == b'\\' {
+                // skip next char handled by the fact that \ is not " or {/}
+                continue;
+            }
+            if b == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &block_start[..i];
+                }
+            }
+            _ => {}
+        }
+    }
+    block_start
+}
+
 /// Find a boolean field value in JSON text by field name.
-/// This is a simple approach that works for flat or nested compilerOptions.
 fn find_bool_field(json: &str, field_name: &str) -> Option<bool> {
-    // Look for "fieldName": true/false pattern
     let pattern = format!("\"{field_name}\"");
     let pos = json.find(&pattern)?;
     let after = &json[pos + pattern.len()..];
-    // Skip whitespace and colon
     let after = after.trim_start();
     let after = after.strip_prefix(':')?;
     let after = after.trim_start();

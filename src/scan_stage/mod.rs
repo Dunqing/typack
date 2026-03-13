@@ -54,18 +54,29 @@ pub struct ScanStage<'a, 'opt> {
 }
 
 impl<'a, 'opt> ScanStage<'a, 'opt> {
-    pub fn new(options: &'opt TypackOptions, allocator: &'a Allocator) -> Self {
+    /// # Errors
+    ///
+    /// Returns an error if an explicit `tsconfig` path is provided but cannot be read.
+    pub fn new(
+        options: &'opt TypackOptions,
+        allocator: &'a Allocator,
+    ) -> Result<Self, Vec<OxcDiagnostic>> {
         let id_config = if let Some(tsconfig_path) = &options.tsconfig {
             let resolved = if tsconfig_path.is_relative() {
                 options.cwd.join(tsconfig_path)
             } else {
                 tsconfig_path.clone()
             };
-            IsolatedDeclarationsConfig::load(&resolved)
+            Some(IsolatedDeclarationsConfig::load(&resolved).map_err(|e| {
+                vec![OxcDiagnostic::error(format!(
+                    "Cannot read tsconfig {}: {e}",
+                    resolved.display()
+                ))]
+            })?)
         } else {
             IsolatedDeclarationsConfig::find(&options.cwd)
         };
-        Self { options, allocator, id_config }
+        Ok(Self { options, allocator, id_config })
     }
 
     /// Run the scan stage: parse entry files, discover imports, build module table.
@@ -101,14 +112,8 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
         for entry in &self.options.input {
             let entry_path = Self::resolve_entry_path(entry)?;
             if !warned_ts_without_id && !is_declaration_file(&entry_path) {
-                let id_enabled = self.id_config.as_ref().is_some_and(|c| c.isolated_declarations);
-                if !id_enabled {
-                    warnings.push(OxcDiagnostic::warn(
-                        "Using .ts entry without isolatedDeclarations enabled in tsconfig.json \
-                         — transform may produce errors",
-                    ));
-                    warned_ts_without_id = true;
-                }
+                warned_ts_without_id =
+                    Self::maybe_warn_ts_without_id(self.id_config.as_ref(), &mut warnings);
             }
             explicit_internal_paths.insert(entry_path.clone());
 
@@ -155,6 +160,12 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
                         );
                     }
                     Ok(ResolvedSpecifier::Internal(canonical)) => {
+                        if !warned_ts_without_id && !is_declaration_file(&canonical) {
+                            warned_ts_without_id = Self::maybe_warn_ts_without_id(
+                                self.id_config.as_ref(),
+                                &mut warnings,
+                            );
+                        }
                         let dep_idx = if let Some(&existing) = path_to_idx.get(&canonical) {
                             existing
                         } else {
@@ -203,6 +214,12 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
                         );
                     }
                     Ok(ResolvedSpecifier::Internal(canonical)) => {
+                        if !warned_ts_without_id && !is_declaration_file(&canonical) {
+                            warned_ts_without_id = Self::maybe_warn_ts_without_id(
+                                self.id_config.as_ref(),
+                                &mut warnings,
+                            );
+                        }
                         let dep_idx = if let Some(&existing) = path_to_idx.get(&canonical) {
                             existing
                         } else {
@@ -422,10 +439,27 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
             let dts_code = Codegen::new().build(&id_ret.program).code;
             let dts_source: &'a str = self.allocator.alloc_str(&dts_code);
             let dts_parsed = Parser::new(self.allocator, dts_source, SourceType::d_ts()).parse();
-            // IsolatedDeclarations output should always parse cleanly
-            debug_assert!(dts_parsed.errors.is_empty());
+            if !dts_parsed.errors.is_empty() {
+                return Err(dts_parsed.errors);
+            }
             Ok((dts_source, dts_parsed.program))
         }
+    }
+
+    /// Emit a warning if `isolatedDeclarations` is not enabled in tsconfig.
+    /// Returns `true` so the caller can set the dedup flag.
+    fn maybe_warn_ts_without_id(
+        id_config: Option<&IsolatedDeclarationsConfig>,
+        warnings: &mut Vec<OxcDiagnostic>,
+    ) -> bool {
+        let id_enabled = id_config.is_some_and(|c| c.isolated_declarations);
+        if !id_enabled {
+            warnings.push(OxcDiagnostic::warn(
+                "Using .ts file without isolatedDeclarations enabled in tsconfig.json \
+                 — transform may produce errors",
+            ));
+        }
+        true
     }
 
     fn resolve_entry_path(entry: &str) -> Result<PathBuf, Vec<OxcDiagnostic>> {

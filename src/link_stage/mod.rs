@@ -329,6 +329,7 @@ mod tests {
                 ..Default::default()
             };
             ScanStage::new(&options, allocator)
+                .unwrap_or_else(|diagnostics| panic!("scan stage init failed: {diagnostics:?}"))
                 .scan()
                 .unwrap_or_else(|diagnostics| panic!("scan failed: {diagnostics:?}"))
         }

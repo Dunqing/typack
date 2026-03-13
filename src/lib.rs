@@ -67,7 +67,7 @@ impl<'a> Bundle<'a> {
         options: &TypackOptions,
         allocator: &'a Allocator,
     ) -> Result<Self, Vec<OxcDiagnostic>> {
-        let scan_output = ScanStage::new(options, allocator).scan()?;
+        let scan_output = ScanStage::new(options, allocator)?.scan()?;
         let link_stage = LinkStage::new(&scan_output);
         let link_output = link_stage.link();
         Ok(Self { scan_output, link_output, allocator, generated: false })
