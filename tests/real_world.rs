@@ -533,10 +533,12 @@ const KNOWN_GLOBALS: &[&str] = &[
     "WeakRef",
     "WeakSet",
     // TS primitive / special types
+    "ArrayBuffer",
     "ArrayConstructor",
     "BigInt",
     "Boolean",
     "BooleanConstructor",
+    "DataView",
     "Date",
     "DateConstructor",
     "Error",
@@ -650,4 +652,155 @@ const KNOWN_GLOBALS: &[&str] = &[
 
 fn is_known_global(name: &str) -> bool {
     KNOWN_GLOBALS.contains(&name)
+}
+
+/// Real-world `.ts` entry point tests.
+///
+/// These test the IsolatedDeclarations transform path by bundling actual `.ts`
+/// source files from real projects (e.g. vitest) that have
+/// `isolatedDeclarations: true` in their tsconfig.json.
+///
+/// Each subdirectory under `tests/real-world-ts/` contains:
+/// - A `tsconfig.json` with `isolatedDeclarations: true`
+/// - One or more `.ts` entry files
+///
+/// The test validates that the bundled output parses, passes semantic checks,
+/// and has no dangling exports or unresolved references.
+#[test]
+fn real_world_ts() {
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let real_world_ts_dir = crate_dir.join("tests").join("real-world-ts");
+
+    if !real_world_ts_dir.exists() {
+        return;
+    }
+
+    let mut dirs: Vec<PathBuf> = fs::read_dir(&real_world_ts_dir)
+        .unwrap()
+        .filter_map(|e| {
+            let path = e.unwrap().path();
+            if path.is_dir() { Some(path) } else { None }
+        })
+        .collect();
+    dirs.sort();
+
+    let mut passed = 0;
+    let mut failed = 0;
+    let mut failures = Vec::new();
+
+    for dir in &dirs {
+        let project_name = dir.file_name().unwrap().to_string_lossy().to_string();
+
+        for (entry, fixture_name) in collect_ts_entries(dir, &project_name) {
+            let result = TypackBundler::bundle(&TypackOptions {
+                input: vec![entry.to_string_lossy().to_string()],
+                cwd: dir.clone(),
+                sourcemap: false,
+                ..Default::default()
+            });
+
+            let bundle = match result {
+                Ok(bundle) => bundle,
+                Err(diagnostics) => {
+                    failed += 1;
+                    let msgs: Vec<String> =
+                        diagnostics.iter().map(std::string::ToString::to_string).collect();
+                    failures.push(format!("{fixture_name}: error: {}", msgs.join(", ")));
+                    continue;
+                }
+            };
+            let output = bundle
+                .output
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("{fixture_name}: should have at least one output"));
+            let actual = output.code;
+
+            if let Err(msg) = validate_generated_declaration(&fixture_name, &entry, &actual) {
+                failed += 1;
+                failures.push(msg);
+                continue;
+            }
+
+            passed += 1;
+        }
+    }
+
+    let total = passed + failed;
+    assert!(total > 0, "No real-world .ts fixtures found");
+    assert!(
+        failed == 0,
+        "Real-world .ts tests failed: {failed}/{total} fixtures failed\n{}",
+        failures.join("\n")
+    );
+}
+
+/// Collect `.ts` entry files from a project directory.
+///
+/// If a `config.json` with an `"entries"` array exists, only those files are
+/// treated as entry points (other `.ts` files are dependencies resolved by the
+/// bundler). Otherwise, all top-level `.ts` files (excluding `.d.ts`) are entries.
+///
+/// Returns `(entry_path, display_name)` pairs.
+fn collect_ts_entries(dir: &PathBuf, project_name: &str) -> Vec<(PathBuf, String)> {
+    let config_path = dir.join("config.json");
+    if config_path.exists() {
+        let config: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&config_path)
+                .unwrap_or_else(|e| panic!("Failed to read config for {project_name}: {e}")),
+        )
+        .unwrap_or_else(|e| panic!("Failed to parse config for {project_name}: {e}"));
+
+        return config["entries"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{project_name}: config.json must have 'entries' array"))
+            .iter()
+            .map(|v| {
+                let name = v.as_str().unwrap();
+                let entry_path = dir.join(name);
+                let stem = Path::new(name).file_stem().unwrap().to_string_lossy().to_string();
+                (entry_path, format!("{project_name}/{stem}"))
+            })
+            .collect();
+    }
+
+    // Fallback: all top-level .ts files (excluding .d.ts)
+    let mut entries: Vec<(PathBuf, String)> = Vec::new();
+
+    let mut files: Vec<PathBuf> = fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| {
+            let path = e.unwrap().path();
+            if path.is_file() { Some(path) } else { None }
+        })
+        .collect();
+    files.sort();
+
+    for file in &files {
+        let name = file.file_name().unwrap().to_string_lossy();
+
+        if name.ends_with(".d.ts")
+            || name.ends_with(".d.mts")
+            || name.ends_with(".d.cts")
+            || name == "tsconfig.json"
+            || name == "config.json"
+        {
+            continue;
+        }
+
+        let stem = if let Some(s) = name.strip_suffix(".ts") {
+            s
+        } else if let Some(s) = name.strip_suffix(".mts") {
+            s
+        } else if let Some(s) = name.strip_suffix(".cts") {
+            s
+        } else {
+            continue;
+        };
+
+        let display = format!("{project_name}/{stem}");
+        entries.push((file.clone(), display));
+    }
+
+    entries
 }
