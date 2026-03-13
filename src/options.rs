@@ -17,6 +17,10 @@ pub struct TypackOptions {
     pub sourcemap: bool,
     /// Emit `export =` for single default export output.
     pub cjs_default: bool,
+    /// Path to a `tsconfig.json` file. When set, IsolatedDeclarations config
+    /// (`isolatedDeclarations`, `stripInternal`) is read from this file instead
+    /// of auto-discovering by walking up from `cwd`.
+    pub tsconfig: Option<PathBuf>,
 }
 
 impl Default for TypackOptions {
@@ -27,6 +31,7 @@ impl Default for TypackOptions {
             cwd: PathBuf::from("."),
             sourcemap: false,
             cjs_default: false,
+            tsconfig: None,
         }
     }
 }

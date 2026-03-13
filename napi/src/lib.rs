@@ -12,6 +12,7 @@ pub struct BundleDtsOptions {
     pub cwd: Option<String>,
     pub sourcemap: Option<bool>,
     pub cjs_default: Option<bool>,
+    pub tsconfig: Option<String>,
 }
 
 #[napi(object)]
@@ -42,6 +43,7 @@ fn bundle_impl(options: BundleDtsOptions) -> Result<BundleDtsResult> {
         cwd: options.cwd.map_or_else(|| PathBuf::from("."), PathBuf::from),
         sourcemap: options.sourcemap.unwrap_or(false),
         cjs_default: options.cjs_default.unwrap_or(false),
+        tsconfig: options.tsconfig.map(PathBuf::from),
     });
 
     match result {

@@ -1,17 +1,20 @@
-//! Scan stage: parses `.d.ts` entry files, discovers transitive imports,
+//! Scan stage: parses `.d.ts` and `.ts` entry files, discovers transitive imports,
 //! and builds the module graph in topological order.
 
 mod collectors;
 mod graph;
 mod resolution;
+mod tsconfig;
 
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use oxc_allocator::Allocator;
+use oxc_codegen::Codegen;
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_index::IndexVec;
+use oxc_isolated_declarations::{IsolatedDeclarations, IsolatedDeclarationsOptions};
 use oxc_parser::Parser;
 use oxc_semantic::SemanticBuilder;
 use oxc_span::SourceType;
@@ -29,6 +32,7 @@ use self::resolution::{
     ResolvedSpecifier, create_dts_resolver, maybe_push_resolution_warning,
     resolve_specifier_for_scan,
 };
+use self::tsconfig::IsolatedDeclarationsConfig;
 
 /// Result of scanning: the module graph.
 pub struct ScanStageOutput<'a> {
@@ -42,15 +46,37 @@ pub struct ScanStageOutput<'a> {
     pub warnings: Vec<OxcDiagnostic>,
 }
 
-/// The scan stage: parses `.d.ts` files, resolves imports, builds module graph.
+/// The scan stage: parses `.d.ts` and `.ts` files, resolves imports, builds module graph.
 pub struct ScanStage<'a, 'opt> {
     options: &'opt TypackOptions,
     allocator: &'a Allocator,
+    id_config: Option<IsolatedDeclarationsConfig>,
 }
 
 impl<'a, 'opt> ScanStage<'a, 'opt> {
-    pub fn new(options: &'opt TypackOptions, allocator: &'a Allocator) -> Self {
-        Self { options, allocator }
+    /// # Errors
+    ///
+    /// Returns an error if an explicit `tsconfig` path is provided but cannot be read.
+    pub fn new(
+        options: &'opt TypackOptions,
+        allocator: &'a Allocator,
+    ) -> Result<Self, Vec<OxcDiagnostic>> {
+        let id_config = if let Some(tsconfig_path) = &options.tsconfig {
+            let resolved = if tsconfig_path.is_relative() {
+                options.cwd.join(tsconfig_path)
+            } else {
+                tsconfig_path.clone()
+            };
+            Some(IsolatedDeclarationsConfig::load(&resolved).map_err(|e| {
+                vec![OxcDiagnostic::error(format!(
+                    "Cannot read tsconfig {}: {e}",
+                    resolved.display()
+                ))]
+            })?)
+        } else {
+            IsolatedDeclarationsConfig::find(&options.cwd)
+        };
+        Ok(Self { options, allocator, id_config })
     }
 
     /// Run the scan stage: parse entry files, discover imports, build module table.
@@ -77,6 +103,7 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
         let mut entry_indices: Vec<ModuleIdx> = Vec::new();
         let mut queue: VecDeque<ModuleIdx> = VecDeque::new();
         let mut visited: FxHashSet<ModuleIdx> = FxHashSet::default();
+        let mut warned_ts_without_id = false;
 
         if self.options.input.is_empty() {
             return Err(vec![OxcDiagnostic::error("No entry points specified")]);
@@ -84,6 +111,10 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
 
         for entry in &self.options.input {
             let entry_path = Self::resolve_entry_path(entry)?;
+            if !warned_ts_without_id && !is_declaration_file(&entry_path) {
+                warned_ts_without_id =
+                    Self::maybe_warn_ts_without_id(self.id_config.as_ref(), &mut warnings);
+            }
             explicit_internal_paths.insert(entry_path.clone());
 
             let entry_idx = self.add_module(
@@ -129,6 +160,12 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
                         );
                     }
                     Ok(ResolvedSpecifier::Internal(canonical)) => {
+                        if !warned_ts_without_id && !is_declaration_file(&canonical) {
+                            warned_ts_without_id = Self::maybe_warn_ts_without_id(
+                                self.id_config.as_ref(),
+                                &mut warnings,
+                            );
+                        }
                         let dep_idx = if let Some(&existing) = path_to_idx.get(&canonical) {
                             existing
                         } else {
@@ -177,6 +214,12 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
                         );
                     }
                     Ok(ResolvedSpecifier::Internal(canonical)) => {
+                        if !warned_ts_without_id && !is_declaration_file(&canonical) {
+                            warned_ts_without_id = Self::maybe_warn_ts_without_id(
+                                self.id_config.as_ref(),
+                                &mut warnings,
+                            );
+                        }
                         let dep_idx = if let Some(&existing) = path_to_idx.get(&canonical) {
                             existing
                         } else {
@@ -314,16 +357,7 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
             vec![OxcDiagnostic::error(format!("Cannot read {}: {e}", path.display()))]
         })?;
 
-        // Allocate source text in the shared arena so it lives as long as 'a.
-        let source: &'a str = self.allocator.alloc_str(&file_contents);
-
-        // Parse once and store the program in the shared arena.
-        let source_type = SourceType::d_ts();
-        let parsed = Parser::new(self.allocator, source, source_type).parse();
-        if !parsed.errors.is_empty() {
-            return Err(parsed.errors);
-        }
-        let program = parsed.program;
+        let (source, program) = self.parse_module(path, &file_contents)?;
 
         // Run semantic analysis and extract scoping information.
         let scoping = SemanticBuilder::new().build(&program).semantic.into_scoping();
@@ -368,6 +402,66 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
         Ok(module_idx)
     }
 
+    /// Parse a module file, applying IsolatedDeclarations transform for `.ts` files.
+    /// Returns `(source_text, program)` where `source_text` is always `.d.ts` content.
+    fn parse_module(
+        &self,
+        path: &Path,
+        file_contents: &str,
+    ) -> Result<(&'a str, oxc_ast::ast::Program<'a>), Vec<OxcDiagnostic>> {
+        if is_declaration_file(path) {
+            let source: &'a str = self.allocator.alloc_str(file_contents);
+            let parsed = Parser::new(self.allocator, source, SourceType::d_ts()).parse();
+            if !parsed.errors.is_empty() {
+                return Err(parsed.errors);
+            }
+            Ok((source, parsed.program))
+        } else {
+            // .ts file: parse as TS, transform via IsolatedDeclarations, re-parse as .d.ts
+            let source: &'a str = self.allocator.alloc_str(file_contents);
+            let source_type = SourceType::from_path(path).unwrap_or_else(|_| SourceType::d_ts());
+            let parsed = Parser::new(self.allocator, source, source_type).parse();
+            if !parsed.errors.is_empty() {
+                return Err(parsed.errors);
+            }
+
+            let strip_internal = self.id_config.as_ref().is_some_and(|c| c.strip_internal);
+            let id_ret = IsolatedDeclarations::new(
+                self.allocator,
+                IsolatedDeclarationsOptions { strip_internal },
+            )
+            .build(&parsed.program);
+            if !id_ret.errors.is_empty() {
+                return Err(id_ret.errors);
+            }
+
+            // Codegen to .d.ts text, then re-parse for correct spans
+            let dts_code = Codegen::new().build(&id_ret.program).code;
+            let dts_source: &'a str = self.allocator.alloc_str(&dts_code);
+            let dts_parsed = Parser::new(self.allocator, dts_source, SourceType::d_ts()).parse();
+            if !dts_parsed.errors.is_empty() {
+                return Err(dts_parsed.errors);
+            }
+            Ok((dts_source, dts_parsed.program))
+        }
+    }
+
+    /// Emit a warning if `isolatedDeclarations` is not enabled in tsconfig.
+    /// Returns `true` so the caller can set the dedup flag.
+    fn maybe_warn_ts_without_id(
+        id_config: Option<&IsolatedDeclarationsConfig>,
+        warnings: &mut Vec<OxcDiagnostic>,
+    ) -> bool {
+        let id_enabled = id_config.is_some_and(|c| c.isolated_declarations);
+        if !id_enabled {
+            warnings.push(OxcDiagnostic::warn(
+                "Using .ts file without isolatedDeclarations enabled in tsconfig.json \
+                 — transform may produce errors",
+            ));
+        }
+        true
+    }
+
     fn resolve_entry_path(entry: &str) -> Result<PathBuf, Vec<OxcDiagnostic>> {
         let entry_path = PathBuf::from(entry);
         // Try canonicalize first (resolves symlinks), fall back to checking
@@ -399,4 +493,10 @@ impl<'a, 'opt> ScanStage<'a, 'opt> {
             Err(_) => path.to_string_lossy().to_string(),
         }
     }
+}
+
+/// Check whether a path refers to a declaration file (`.d.ts`, `.d.mts`, `.d.cts`).
+fn is_declaration_file(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    name.ends_with(".d.ts") || name.ends_with(".d.mts") || name.ends_with(".d.cts")
 }

@@ -15,6 +15,7 @@ export interface BundleDtsOptions {
   cwd?: string;
   sourcemap?: boolean;
   cjsDefault?: boolean;
+  tsconfig?: string;
 }
 
 export interface BundleDtsOutput {
