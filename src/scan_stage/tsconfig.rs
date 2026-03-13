@@ -158,15 +158,20 @@ fn extract_compiler_options(json: &str) -> &str {
     // Find the matching closing brace, respecting nesting
     let mut depth = 1u32;
     let mut in_string = false;
-    for (i, b) in block_start.bytes().enumerate() {
+    let block_bytes = block_start.as_bytes();
+    let mut i = 0;
+    while i < block_bytes.len() {
+        let b = block_bytes[i];
         if in_string {
-            if b == b'\\' {
-                // skip next char handled by the fact that \ is not " or {/}
+            if b == b'\\' && i + 1 < block_bytes.len() {
+                // Skip the escaped character entirely
+                i += 2;
                 continue;
             }
             if b == b'"' {
                 in_string = false;
             }
+            i += 1;
             continue;
         }
         match b {
@@ -180,6 +185,7 @@ fn extract_compiler_options(json: &str) -> &str {
             }
             _ => {}
         }
+        i += 1;
     }
     block_start
 }
@@ -198,5 +204,42 @@ fn find_bool_field(json: &str, field_name: &str) -> Option<bool> {
         Some(false)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escaped_quotes_in_compiler_options() {
+        // Escaped quotes inside a string value should not break brace-depth tracking
+        let json =
+            r#"{ "compilerOptions": { "someKey": "has \" quote", "isolatedDeclarations": true } }"#;
+        let config = IsolatedDeclarationsConfig::parse(json);
+        assert!(config.isolated_declarations);
+    }
+
+    #[test]
+    fn escaped_backslash_before_quote() {
+        // A double backslash (\\) followed by a closing quote should end the string correctly
+        let json = r#"{ "compilerOptions": { "path": "C:\\", "isolatedDeclarations": true } }"#;
+        let config = IsolatedDeclarationsConfig::parse(json);
+        assert!(config.isolated_declarations);
+    }
+
+    #[test]
+    fn nested_braces_in_string_values() {
+        let json = r#"{ "compilerOptions": { "desc": "use { and }", "stripInternal": true } }"#;
+        let config = IsolatedDeclarationsConfig::parse(json);
+        assert!(config.strip_internal);
+    }
+
+    #[test]
+    fn scoped_to_compiler_options() {
+        // A field outside compilerOptions should not be matched
+        let json = r#"{ "isolatedDeclarations": true, "compilerOptions": { "isolatedDeclarations": false } }"#;
+        let config = IsolatedDeclarationsConfig::parse(json);
+        assert!(!config.isolated_declarations);
     }
 }
