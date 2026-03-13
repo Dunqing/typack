@@ -122,6 +122,12 @@ export function useTypack() {
       try {
         vol.mkdirSync("/src", { recursive: true });
       } catch {}
+      // Provide a default tsconfig.json so .ts entries work with IsolatedDeclarations
+      vol.writeFileSync(
+        "/src/tsconfig.json",
+        '{"compilerOptions":{"isolatedDeclarations":true}}',
+        "utf8",
+      );
       for (const [name, content] of Object.entries(files)) {
         vol.writeFileSync(`/src/${name}`, content, "utf8");
       }
