@@ -11,6 +11,10 @@ fn real_world_dir() -> PathBuf {
     crate_dir().join("tests").join("real-world")
 }
 
+fn bench_fixtures_dir() -> PathBuf {
+    crate_dir().join("benches").join("fixtures")
+}
+
 fn make_options(entries: &[PathBuf]) -> TypackOptions {
     TypackOptions {
         input: entries.iter().map(|p| p.to_string_lossy().to_string()).collect(),
@@ -63,5 +67,18 @@ fn bundle_real_world(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bundle_real_world);
+fn bundle_ts_entry(c: &mut Criterion) {
+    let ts_entry = bench_fixtures_dir().join("ts-entry").join("index.ts");
+
+    let mut group = c.benchmark_group("bundle_ts");
+
+    group.bench_function("ts_entry_isolated_declarations", |b| {
+        let opts = make_options(std::slice::from_ref(&ts_entry));
+        b.iter(|| TypackBundler::bundle(&opts).unwrap());
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, bundle_real_world, bundle_ts_entry);
 criterion_main!(benches);

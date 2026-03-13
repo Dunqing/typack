@@ -37,7 +37,11 @@ struct Cli {
     #[bpaf(long("outdir"), argument("DIR"), optional)]
     outdir: Option<PathBuf>,
 
-    /// Entry .d.ts files to bundle
+    /// Path to tsconfig.json (default: auto-detect from cwd)
+    #[bpaf(long("tsconfig"), argument("PATH"), optional)]
+    tsconfig: Option<PathBuf>,
+
+    /// Entry .d.ts or .ts files to bundle
     #[bpaf(positional("ENTRY"), some("at least one entry file is required"))]
     input: Vec<String>,
 }
@@ -92,6 +96,7 @@ pub fn run_cli(args: &[String]) -> ! {
         cwd,
         sourcemap: cli.sourcemap,
         cjs_default: cli.cjs_default,
+        tsconfig: cli.tsconfig,
     };
     let result = TypackBundler::bundle(&options);
 

@@ -19,7 +19,7 @@
 
 A native TypeScript declaration (`.d.ts`) bundler built on [Oxc](https://oxc.rs).
 
-Bundles one or more `.d.ts` entry points into a single output file using a three-stage AST pipeline — no TypeScript compiler required.
+Bundles one or more `.d.ts` (or `.ts`) entry points into a single output file using a three-stage AST pipeline — no TypeScript compiler required.
 
 **[Try it in the REPL →](https://typack.pages.dev)**
 
@@ -31,15 +31,31 @@ Bundles one or more `.d.ts` entry points into a single output file using a three
 - **Source maps** — optional source map composition back to original `.d.ts` sources
 - **External packages** — configurable external specifiers preserved as imports in the output
 - **CJS support** — optional `export =` syntax for CommonJS default exports
+- **`.ts` entry points** — automatically generates declarations via Oxc's IsolatedDeclarations transform (requires `isolatedDeclarations` in tsconfig)
 - **Node.js bindings** — pre-built N-API bindings for 8 platforms via npm
 
 ## How it works
 
 The bundler runs a three-stage pipeline:
 
-1. **Scan** — parse `.d.ts` files with `oxc_parser`, build semantic scoping via `oxc_semantic`, resolve imports with `oxc_resolver`, and produce a topologically sorted module graph
+1. **Scan** — parse `.d.ts` files (or `.ts` files via IsolatedDeclarations) with `oxc_parser`, build semantic scoping via `oxc_semantic`, resolve imports with `oxc_resolver`, and produce a topologically sorted module graph
 2. **Link** — analyze the module graph to build a rename plan (deconflicting names across modules) and a needed-names plan (tree-shaking unused declarations)
 3. **Generate** — apply renames, rewrite inline `import()` types, wrap namespace imports, filter unused declarations, and emit the bundled output with optional source maps
+
+## `.ts` entry points
+
+In addition to `.d.ts` files, typack accepts `.ts` entry points directly. When a `.ts` file is encountered (as an entry or as a dependency), it is transformed to `.d.ts` in-memory using Oxc's [IsolatedDeclarations](https://oxc.rs/docs/guide/usage/transformer/isolated-declarations.html) transform before bundling.
+
+This means your `.ts` source must conform to TypeScript's [`isolatedDeclarations`](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-5.html#isolated-declarations) constraints — primarily, all exported functions and variables need explicit return/type annotations.
+
+typack reads `tsconfig.json` to pick up two relevant settings. By default it walks up from `cwd` to find the nearest `tsconfig.json`, or you can pass an explicit path via `--tsconfig` (CLI) or the `tsconfig` option (API):
+
+| tsconfig field         | Effect                                                               |
+| ---------------------- | -------------------------------------------------------------------- |
+| `isolatedDeclarations` | Suppresses a warning when `.ts` files are used without this enabled  |
+| `stripInternal`        | Excludes declarations marked with `/** @internal */` from the output |
+
+A warning is emitted if `.ts` files are used but `isolatedDeclarations` is not enabled in tsconfig. The transform still runs — any errors from non-conforming code will surface naturally.
 
 ## Rust
 
@@ -88,13 +104,14 @@ match result {
 
 **`TypackOptions`**
 
-| Field         | Type          | Default | Description                                    |
-| ------------- | ------------- | ------- | ---------------------------------------------- |
-| `input`       | `Vec<String>` | `[]`    | Entry `.d.ts` file paths to bundle             |
-| `external`    | `Vec<String>` | `[]`    | Module specifiers to keep as external imports  |
-| `cwd`         | `PathBuf`     | `"."`   | Working directory for relative path resolution |
-| `sourcemap`   | `bool`        | `false` | Generate source map (`.d.ts.map`)              |
-| `cjs_default` | `bool`        | `false` | Emit `export =` for single default export      |
+| Field         | Type              | Default | Description                                    |
+| ------------- | ----------------- | ------- | ---------------------------------------------- |
+| `input`       | `Vec<String>`     | `[]`    | Entry `.d.ts` or `.ts` file paths to bundle    |
+| `external`    | `Vec<String>`     | `[]`    | Module specifiers to keep as external imports  |
+| `cwd`         | `PathBuf`         | `"."`   | Working directory for relative path resolution |
+| `sourcemap`   | `bool`            | `false` | Generate source map (`.d.ts.map`)              |
+| `cjs_default` | `bool`            | `false` | Emit `export =` for single default export      |
+| `tsconfig`    | `Option<PathBuf>` | `None`  | Path to `tsconfig.json` (default: auto-detect) |
 
 **`BundleResult`**
 
@@ -121,24 +138,31 @@ cargo run --features cli -- [OPTIONS] <ENTRY>...
 ### Options
 
 ```
-<ENTRY>...                Entry .d.ts files to bundle
+<ENTRY>...                Entry .d.ts or .ts files to bundle
 --external <SPEC>         Module specifiers to keep external (repeatable)
 --cwd <DIR>               Working directory (default: current directory)
 --sourcemap               Generate source map (.d.ts.map)
 --cjs-default             Emit `export =` for single default export
 -o, --outfile <PATH>      Write output to file instead of stdout (single entry only)
 --outdir <DIR>            Write outputs to directory (one per entry)
+--tsconfig <PATH>         Path to tsconfig.json (default: auto-detect from cwd)
 ```
 
 ### Example
 
 ```bash
+# Bundle .d.ts entry
 cargo run --features cli -- \
   --external react \
   --external react-dom \
   --sourcemap \
   -o dist/index.d.ts \
   types/index.d.ts
+
+# Bundle .ts entry (requires isolatedDeclarations in tsconfig.json)
+cargo run --features cli -- \
+  -o dist/index.d.ts \
+  src/index.ts
 ```
 
 ## Node.js
@@ -164,7 +188,7 @@ Requires Node.js >= 20. Pre-built binaries are available for:
 import { bundle } from "typack";
 
 const result = bundle({
-  input: ["types/index.d.ts"],
+  input: ["types/index.d.ts"], // or ["src/index.ts"] for .ts entry
   cwd: process.cwd(),
   external: ["react"],
   sourcemap: true,
@@ -187,11 +211,13 @@ for (const warning of result.warnings) {
 
 ```typescript
 interface BundleDtsOptions {
+  /** Entry `.d.ts` or `.ts` file paths to bundle */
   input: Array<string>;
   external?: Array<string>;
   cwd?: string;
   sourcemap?: boolean;
   cjsDefault?: boolean;
+  tsconfig?: string;
 }
 
 interface BundleDtsOutput {
@@ -228,20 +254,20 @@ Module resolution uses `oxc_resolver` with the `"types"` export condition enable
 
 Several tools exist for bundling TypeScript declarations. Here's how they compare:
 
-|                           | typack                | [rolldown-plugin-dts]  | [@microsoft/api-extractor] | [dts-bundle-generator] | [rollup-plugin-dts]   |
-| ------------------------- | --------------------- | ---------------------- | -------------------------- | ---------------------- | --------------------- |
-| **Language**              | Rust                  | TypeScript + Rust      | TypeScript                 | TypeScript             | TypeScript            |
-| **Approach**              | Standalone bundler    | Rolldown plugin        | Standalone CLI/API         | Standalone CLI         | Rollup plugin         |
-| **Input**                 | Pre-generated `.d.ts` | `.ts` source files     | Pre-generated `.d.ts`      | `.ts` source files     | Pre-generated `.d.ts` |
-| **Generates `.d.ts`**     | No                    | Yes (tsc / oxc / tsgo) | No                         | Yes (in-memory tsc)    | No                    |
-| **Requires tsc**          | No                    | Optional               | Yes (for input)            | Yes (bundled)          | Yes (for input)       |
-| **Multiple entry points** | Yes                   | Yes                    | No                         | Yes                    | Yes                   |
-| **Tree-shaking**          | Yes                   | Yes                    | Yes (via trimming)         | Yes                    | Yes                   |
-| **Source maps**           | Yes                   | Yes                    | No                         | No                     | No                    |
-| **Semantic rename**       | Yes (SymbolId)        | Yes (via typack)       | Yes                        | Yes                    | Yes                   |
-| **API report / docs**     | No                    | No                     | Yes                        | No                     | No                    |
-| **Release trimming**      | No                    | No                     | Yes (@alpha, @beta, etc.)  | No                     | No                    |
-| **Status**                | Active                | Active                 | Active                     | Active                 | Maintenance mode      |
+|                           | typack                                      | [rolldown-plugin-dts]  | [@microsoft/api-extractor] | [dts-bundle-generator] | [rollup-plugin-dts]   |
+| ------------------------- | ------------------------------------------- | ---------------------- | -------------------------- | ---------------------- | --------------------- |
+| **Language**              | Rust                                        | TypeScript + Rust      | TypeScript                 | TypeScript             | TypeScript            |
+| **Approach**              | Standalone bundler                          | Rolldown plugin        | Standalone CLI/API         | Standalone CLI         | Rollup plugin         |
+| **Input**                 | `.d.ts` or `.ts` (via IsolatedDeclarations) | `.ts` source files     | Pre-generated `.d.ts`      | `.ts` source files     | Pre-generated `.d.ts` |
+| **Generates `.d.ts`**     | No                                          | Yes (tsc / oxc / tsgo) | No                         | Yes (in-memory tsc)    | No                    |
+| **Requires tsc**          | No                                          | Optional               | Yes (for input)            | Yes (bundled)          | Yes (for input)       |
+| **Multiple entry points** | Yes                                         | Yes                    | No                         | Yes                    | Yes                   |
+| **Tree-shaking**          | Yes                                         | Yes                    | Yes (via trimming)         | Yes                    | Yes                   |
+| **Source maps**           | Yes                                         | Yes                    | No                         | No                     | No                    |
+| **Semantic rename**       | Yes (SymbolId)                              | Yes (via typack)       | Yes                        | Yes                    | Yes                   |
+| **API report / docs**     | No                                          | No                     | Yes                        | No                     | No                    |
+| **Release trimming**      | No                                          | No                     | Yes (@alpha, @beta, etc.)  | No                     | No                    |
+| **Status**                | Active                                      | Active                 | Active                     | Active                 | Maintenance mode      |
 
 ### How they differ
 
@@ -253,7 +279,7 @@ Several tools exist for bundling TypeScript declarations. Here's how they compar
 
 **[rollup-plugin-dts]** is a Rollup plugin that bundles pre-generated `.d.ts` files using Rollup's module graph. It is currently in maintenance mode with no new feature development.
 
-**typack** is a standalone, native bundler that operates directly on `.d.ts` ASTs. It does not generate declarations from `.ts` source — it expects pre-generated `.d.ts` files as input. Its focus is on speed, correctness (semantic-level rename deconfliction), and source map support.
+**typack** is a standalone, native bundler that operates directly on `.d.ts` ASTs. It can also accept `.ts` entry points — these are transformed to `.d.ts` in-memory via Oxc's IsolatedDeclarations (requires `isolatedDeclarations` in tsconfig). Its focus is on speed, correctness (semantic-level rename deconfliction), and source map support.
 
 [rolldown-plugin-dts]: https://github.com/sxzz/rolldown-plugin-dts
 [@microsoft/api-extractor]: https://api-extractor.com/

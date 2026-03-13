@@ -451,3 +451,51 @@ fn warnings_printed_to_stderr() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("warning:"), "expected warnings on stderr, got:\n{stderr}");
 }
+
+#[test]
+fn ts_entry_bundles_declarations() {
+    let project = TempProject::new("cli_ts_entry");
+    project.write_file(
+        "index.ts",
+        "export interface Greeting { message: string; }\nexport function greet(name: string): string { return `Hello, ${name}`; }\n",
+    );
+
+    let entry = project.root.join("index.ts").to_string_lossy().to_string();
+    let output = bin().arg(&entry).output().expect("failed to run binary");
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("interface Greeting"),
+        "expected Greeting interface in output:\n{stdout}"
+    );
+    assert!(stdout.contains("function greet"), "expected greet declaration in output:\n{stdout}");
+}
+
+#[test]
+fn tsconfig_flag_picks_up_strip_internal() {
+    let project = TempProject::new("cli_tsconfig_flag");
+    project.write_file(
+        "tsconfig.build.json",
+        r#"{ "compilerOptions": { "isolatedDeclarations": true, "stripInternal": true } }"#,
+    );
+    project.write_file(
+        "index.ts",
+        "export interface Public { name: string; }\n/** @internal */\nexport interface Private { secret: string; }\n",
+    );
+
+    let entry = project.root.join("index.ts").to_string_lossy().to_string();
+    let output = bin()
+        .arg("--tsconfig")
+        .arg("tsconfig.build.json")
+        .arg("--cwd")
+        .arg(&project.root)
+        .arg(&entry)
+        .output()
+        .expect("failed to run binary");
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("interface Public"), "expected Public in output:\n{stdout}");
+    assert!(!stdout.contains("Private"), "expected Private to be stripped:\n{stdout}");
+}

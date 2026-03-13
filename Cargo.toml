@@ -9,7 +9,7 @@ keywords = ["JavaScript", "TypeScript", "dts", "bundler", "parser"]
 license = "MIT"
 repository = "https://github.com/Dunqing/typack"
 rust-version = "1.91.0"
-description = "A native TypeScript declaration (.d.ts) bundler built on Oxc crates."
+description = "A native TypeScript declaration (.d.ts/.ts) bundler built on Oxc crates."
 include = ["/src", "/tests", "/README.md", "/LICENSE"]
 
 [lints.rust]
@@ -96,6 +96,7 @@ oxc_ast = "0.115.0"
 oxc_ast_visit = "0.115.0"
 oxc_codegen = { version = "0.115.0", features = ["sourcemap"] }
 oxc_diagnostics = "0.115.0"
+oxc_isolated_declarations = "0.115.0"
 oxc_index = { version = "4.1.0", features = ["nonmax", "serde"] }
 oxc_parser = { version = "0.115.0", features = ["regular_expression"] }
 oxc_resolver = "11.19.0"

@@ -1,8 +1,9 @@
 //! A native TypeScript `.d.ts` declaration bundler built on Oxc.
 //!
 //! Implements a three-stage pipeline (Scan, Link, Generate) that parses `.d.ts`
-//! files, resolves imports, applies tree-shaking and rename deconfliction, and
-//! emits one bundled declaration file per entry point with optional source maps.
+//! files (or `.ts` files via IsolatedDeclarations), resolves imports, applies
+//! tree-shaking and rename deconfliction, and emits one bundled declaration file
+//! per entry point with optional source maps.
 
 mod generate_stage;
 mod helpers;
