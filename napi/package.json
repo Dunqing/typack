@@ -1,6 +1,6 @@
 {
   "name": "typack",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A native TypeScript declaration (.d.ts) bundler built on Oxc",
   "keywords": [
     "bundler",
