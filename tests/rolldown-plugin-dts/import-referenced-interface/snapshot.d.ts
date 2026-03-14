@@ -1,10 +1,8 @@
-// index.d.ts
-//#region tests/fixtures/import-referenced-interface/bar.d.ts
+//#region tests/rolldown-plugin-dts/import-referenced-interface/bar.d.ts
 interface Bar {}
 //#endregion
-//#region tests/fixtures/import-referenced-interface/index.d.ts
-interface Foo {
+//#region tests/rolldown-plugin-dts/import-referenced-interface/index.d.ts
+export interface Foo {
   bar: Bar;
 }
 //#endregion
-export { Foo };

@@ -101,14 +101,14 @@ type Plugins = Array<Plugin>;
 declare function createDOMElementFilter(filterNode?: (node: any) => boolean): NewPlugin;
 //#endregion
 //#region tests/real-world/vitest/pretty-format.d.ts
-declare const DEFAULT_OPTIONS: Options;
+export declare const DEFAULT_OPTIONS: Options;
 /**
 * Returns a presentation string of your `val` object
 * @param val any potential JavaScript object
 * @param options Custom settings
 */
-declare function format(val: unknown, options?: OptionsReceived): string;
-declare const plugins: {
+export declare function format(val: unknown, options?: OptionsReceived): string;
+export declare const plugins: {
   AsymmetricMatcher: NewPlugin;
   DOMCollection: NewPlugin;
   DOMElement: NewPlugin;
@@ -118,4 +118,4 @@ declare const plugins: {
   Error: NewPlugin;
 };
 //#endregion
-export { type Colors, type CompareKeys, type Config, DEFAULT_OPTIONS, type NewPlugin, type OldPlugin, type Options, type OptionsReceived, type Plugin, type Plugins, type PrettyFormatOptions, type Printer, type Refs, type Theme, createDOMElementFilter, format, plugins };
+export { type Colors, type CompareKeys, type Config, type NewPlugin, type OldPlugin, type Options, type OptionsReceived, type Plugin, type Plugins, type PrettyFormatOptions, type Printer, type Refs, type Theme, createDOMElementFilter };

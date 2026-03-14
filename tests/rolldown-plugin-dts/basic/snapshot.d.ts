@@ -1,8 +1,7 @@
-// index.d.ts
-//#region tests/fixtures/basic/mod.d.ts
+//#region tests/rolldown-plugin-dts/basic/mod.d.ts
 declare const a: string;
 //#endregion
-//#region tests/fixtures/basic/foo.d.ts
+//#region tests/rolldown-plugin-dts/basic/foo.d.ts
 declare const foo: number;
 declare const bar: typeof a;
 type SomeType<T> = T;

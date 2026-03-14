@@ -1,10 +1,8 @@
-// index.d.ts
-//#region tests/fixtures/import-renamed/bar.d.ts
+//#region tests/rolldown-plugin-dts/import-renamed/bar.d.ts
 interface Bar {}
 //#endregion
-//#region tests/fixtures/import-renamed/index.d.ts
-interface Foo {
+//#region tests/rolldown-plugin-dts/import-renamed/index.d.ts
+export interface Foo {
   bar: Bar;
 }
 //#endregion
-export { Foo };

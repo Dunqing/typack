@@ -1,5 +1,3 @@
-// index.d.ts
-//#region tests/fixtures/issue-189/index.d.ts
-declare class MyClass extends null {}
+//#region tests/rolldown-plugin-dts/issue-189/index.d.ts
+export declare class MyClass extends null {}
 //#endregion
-export { MyClass };

@@ -1,7 +1,5 @@
-// index.d.ts
-//#region tests/fixtures/issue-201/index.d.ts
-declare const depth: {
+//#region tests/rolldown-plugin-dts/issue-201/index.d.ts
+export declare const depth: {
   [-24]: string;
 };
 //#endregion
-export { depth };

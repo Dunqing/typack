@@ -124,13 +124,28 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
     /// Generate the bundled `.d.ts` output for a single entry.
     fn generate_entry(&mut self, entry_idx: ModuleIdx, single_entry: bool) -> GenerateOutput {
         let mut joiner = SourceJoiner::default();
-        let mut acc = GenerateAcc::default();
         let per_entry = build_per_entry_link_data(
             self.scan_result,
             entry_idx,
             &self.needed_names_ctx,
             self.link_output,
         );
+
+        let keep_entry_exports_inline = {
+            let entry_module = &self.scan_result.module_table[entry_idx];
+            let ns_wrapped = per_entry.namespace_wraps[entry_idx].as_ref().is_some();
+            let has_symbol_renames =
+                self.link_output.canonical_names.module_symbol_renames(entry_idx).is_some();
+            let has_fallback_renames = self
+                .link_output
+                .canonical_names
+                .fallback_name_renames
+                .keys()
+                .any(|(idx, _)| *idx == entry_idx);
+            entry_module.is_entry && !ns_wrapped && !has_symbol_renames && !has_fallback_renames
+        };
+
+        let mut acc = GenerateAcc::new(entry_idx, keep_entry_exports_inline);
 
         for directive in &self.unique_directives {
             joiner.append_raw(format!("{directive}\n"));
@@ -257,7 +272,10 @@ impl<'a, 'b> GenerateStage<'a, 'b> {
             let mut export_output = String::new();
             emit::write_export_statement(final_exports, &mut export_output);
             joiner.append_raw(export_output);
-        } else if acc.has_any_export_statement && acc.star_exports.is_empty() {
+        } else if acc.has_any_export_statement
+            && acc.star_exports.is_empty()
+            && !acc.has_kept_inline_exports
+        {
             // Source had `export {}` with no actual exports — preserve the empty export
             joiner.append_raw("export { };");
         }

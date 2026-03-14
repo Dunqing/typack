@@ -1,5 +1,3 @@
-// index.d.ts
-//#region tests/fixtures/export-simple-class/index.d.ts
-declare class Foo {}
+//#region tests/rolldown-plugin-dts/export-simple-class/index.d.ts
+export declare class Foo {}
 //#endregion
-export { Foo };

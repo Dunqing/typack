@@ -1,9 +1,8 @@
-// index.d.ts
-//#region tests/fixtures/generic-shadowing/mod.d.ts
+//#region tests/rolldown-plugin-dts/generic-shadowing/mod.d.ts
 type Config1<Client> = Client;
 //#endregion
-//#region tests/fixtures/generic-shadowing/index.d.ts
-type Client = any;
-type Config2<Client> = Client;
+//#region tests/rolldown-plugin-dts/generic-shadowing/index.d.ts
+export type Client = any;
+export type Config2<Client> = Client;
 //#endregion
-export { Client, Config1, Config2 };
+export { Config1 };

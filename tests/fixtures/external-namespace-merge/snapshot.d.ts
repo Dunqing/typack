@@ -1,4 +1,3 @@
-// index.d.ts
 import { Node, Token } from "ext-pkg";
 
 //#region tests/fixtures/external-namespace-merge/lib-ns.d.ts

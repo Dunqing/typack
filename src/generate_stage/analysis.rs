@@ -62,13 +62,19 @@ fn collect_statement_outputs<'a>(
                     return;
                 }
                 if module.is_entry {
-                    let before_len = acc.exports.len();
-                    collect_declaration_names(decl, &mut acc.exports);
-                    for exp in &mut acc.exports[before_len..] {
-                        if let Some(new_name) =
-                            link_output.canonical_names.resolve_name(module, &exp.local)
-                        {
-                            exp.local = new_name.to_string();
+                    if acc.should_keep_export_inline(module.idx) {
+                        // Export will be kept inline on the declaration —
+                        // don't add to consolidated export list.
+                        acc.has_kept_inline_exports = true;
+                    } else {
+                        let before_len = acc.exports.len();
+                        collect_declaration_names(decl, &mut acc.exports);
+                        for exp in &mut acc.exports[before_len..] {
+                            if let Some(new_name) =
+                                link_output.canonical_names.resolve_name(module, &exp.local)
+                            {
+                                exp.local = new_name.to_string();
+                            }
                         }
                     }
                 }

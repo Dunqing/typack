@@ -43,9 +43,9 @@ declare const DOMErrorMessages: {
 };
 //#endregion
 //#region tests/real-world/core/compiler-dom.d.ts
-declare const DOMNodeTransforms: NodeTransform[];
-declare const DOMDirectiveTransforms: Record<string, DirectiveTransform>;
-declare function compile(src: string | RootNode, options?: CompilerOptions): CodegenResult;
-declare function parse(template: string, options?: ParserOptions): RootNode;
+export declare const DOMNodeTransforms: NodeTransform[];
+export declare const DOMDirectiveTransforms: Record<string, DirectiveTransform>;
+export declare function compile(src: string | RootNode, options?: CompilerOptions): CodegenResult;
+export declare function parse(template: string, options?: ParserOptions): RootNode;
 //#endregion
-export { DOMDirectiveTransforms, DOMErrorCodes, DOMErrorMessages, DOMNodeTransforms, TRANSITION, TRANSITION_GROUP, V_MODEL_CHECKBOX, V_MODEL_DYNAMIC, V_MODEL_RADIO, V_MODEL_SELECT, V_MODEL_TEXT, V_ON_WITH_KEYS, V_ON_WITH_MODIFIERS, V_SHOW, compile, createDOMCompilerError, parse, parserOptions, transformStyle };
+export { DOMErrorCodes, DOMErrorMessages, TRANSITION, TRANSITION_GROUP, V_MODEL_CHECKBOX, V_MODEL_DYNAMIC, V_MODEL_RADIO, V_MODEL_SELECT, V_MODEL_TEXT, V_ON_WITH_KEYS, V_ON_WITH_MODIFIERS, V_SHOW, createDOMCompilerError, parserOptions, transformStyle };

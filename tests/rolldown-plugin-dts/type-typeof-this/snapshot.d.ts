@@ -1,7 +1,5 @@
-// index.d.ts
-//#region tests/fixtures/type-typeof-this/index.d.ts
-declare class NumberSchema {
+//#region tests/rolldown-plugin-dts/type-typeof-this/index.d.ts
+export declare class NumberSchema {
   min: () => typeof this;
 }
 //#endregion
-export { NumberSchema };

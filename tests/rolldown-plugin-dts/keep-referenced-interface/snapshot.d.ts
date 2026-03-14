@@ -1,8 +1,6 @@
-// index.d.ts
-//#region tests/fixtures/keep-referenced-interface/index.d.ts
+//#region tests/rolldown-plugin-dts/keep-referenced-interface/index.d.ts
 interface Bar {}
-interface Foo {
+export interface Foo {
   bar: Bar;
 }
 //#endregion
-export { Foo };

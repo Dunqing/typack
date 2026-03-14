@@ -1,8 +1,6 @@
-// index.d.ts
-//#region tests/fixtures/typeof-this/index.d.ts
-declare class Test {
+//#region tests/rolldown-plugin-dts/typeof-this/index.d.ts
+export declare class Test {
   functionOne(foo: string, bar: number): void;
   functionTwo(...args: Parameters<typeof this.functionOne>): void;
 }
 //#endregion
-export { Test };

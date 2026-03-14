@@ -1,8 +1,7 @@
-// index.d.ts
-//#region tests/fixtures/export-star/b.d.ts
+//#region tests/rolldown-plugin-dts/export-star/b.d.ts
 interface B {}
 //#endregion
-//#region tests/fixtures/export-star/index.d.ts
-declare class A {}
+//#region tests/rolldown-plugin-dts/export-star/index.d.ts
+export declare class A {}
 //#endregion
-export { A, B };
+export { B };

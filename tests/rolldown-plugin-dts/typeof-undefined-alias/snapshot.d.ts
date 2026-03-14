@@ -1,6 +1,4 @@
-// index.d.ts
-//#region tests/fixtures/typeof-undefined-alias/index.d.ts
-declare let undefined$1: string;
-type T = typeof undefined$1;
+//#region tests/rolldown-plugin-dts/typeof-undefined-alias/index.d.ts
+export declare let undefined: string;
+export type T = typeof undefined;
 //#endregion
-export { T, undefined$1 as undefined };

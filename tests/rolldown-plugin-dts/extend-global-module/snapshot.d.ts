@@ -1,5 +1,4 @@
-// index.d.ts
-//#region tests/fixtures/extend-global-module/second.d.ts
+//#region tests/rolldown-plugin-dts/extend-global-module/second.d.ts
 interface Second$2 {}
 declare global {
   namespace NodeJS {
@@ -9,7 +8,7 @@ declare global {
   }
 }
 //#endregion
-//#region tests/fixtures/extend-global-module/second2.d.ts
+//#region tests/rolldown-plugin-dts/extend-global-module/second2.d.ts
 interface Second$1 {}
 declare global {
   namespace NodeJS {
@@ -19,13 +18,13 @@ declare global {
   }
 }
 //#endregion
-//#region tests/fixtures/extend-global-module/second3.d.ts
+//#region tests/rolldown-plugin-dts/extend-global-module/second3.d.ts
 interface Second {}
 declare module "foobar" {
   const second3: Second;
 }
 //#endregion
-//#region tests/fixtures/extend-global-module/index.d.ts
+//#region tests/rolldown-plugin-dts/extend-global-module/index.d.ts
 interface First {}
 declare global {
   namespace NodeJS {

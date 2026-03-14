@@ -1,5 +1,3 @@
-// index.d.ts
-//#region tests/fixtures/import-no-import-clause/index.d.ts
-interface Foo {}
+//#region tests/rolldown-plugin-dts/import-no-import-clause/index.d.ts
+export interface Foo {}
 //#endregion
-export { Foo };

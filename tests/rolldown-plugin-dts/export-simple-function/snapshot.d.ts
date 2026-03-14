@@ -1,5 +1,3 @@
-// index.d.ts
-//#region tests/fixtures/export-simple-function/index.d.ts
-declare function foo(): void;
+//#region tests/rolldown-plugin-dts/export-simple-function/index.d.ts
+export declare function foo(): void;
 //#endregion
-export { foo };

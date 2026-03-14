@@ -64,12 +64,19 @@ pub(super) fn render_module<'a>(
                 }
                 StatementAction::UnwrapExportDeclaration => {
                     let stmt = scan_result.ast_table[module_idx].body[i].take_in(allocator);
-                    let Statement::ExportNamedDeclaration(export) = stmt else { unreachable!() };
-                    let export_span_start = export.span.start;
-                    let mut decl = export.unbox().declaration.unwrap();
-                    ensure_declare_on_declaration(&mut decl);
-                    decl.span_mut().start = export_span_start;
-                    transformed_body.push(Statement::from(decl));
+                    let Statement::ExportNamedDeclaration(mut export) = stmt else {
+                        unreachable!()
+                    };
+                    if acc.should_keep_export_inline(module_idx) {
+                        ensure_declare_on_declaration(export.declaration.as_mut().unwrap());
+                        transformed_body.push(Statement::ExportNamedDeclaration(export));
+                    } else {
+                        let export_span_start = export.span.start;
+                        let mut decl = export.unbox().declaration.unwrap();
+                        ensure_declare_on_declaration(&mut decl);
+                        decl.span_mut().start = export_span_start;
+                        transformed_body.push(Statement::from(decl));
+                    }
                 }
                 StatementAction::UnwrapExportDefault => {
                     let stmt = scan_result.ast_table[module_idx].body[i].take_in(allocator);
@@ -116,16 +123,29 @@ pub(super) fn render_module<'a>(
                     transformed_body.push(stmt);
                 }
                 StatementAction::UnwrapExportDeclaration => {
-                    let Statement::ExportNamedDeclaration(export) =
-                        &scan_result.ast_table[module_idx].body[i]
-                    else {
-                        unreachable!()
-                    };
-                    let mut decl =
-                        export.declaration.as_ref().unwrap().clone_in_with_semantic_ids(allocator);
-                    ensure_declare_on_declaration(&mut decl);
-                    decl.span_mut().start = export.span.start;
-                    transformed_body.push(Statement::from(decl));
+                    if acc.should_keep_export_inline(module_idx) {
+                        let mut stmt = scan_result.ast_table[module_idx].body[i]
+                            .clone_in_with_semantic_ids(allocator);
+                        let Statement::ExportNamedDeclaration(ref mut export) = stmt else {
+                            unreachable!()
+                        };
+                        ensure_declare_on_declaration(export.declaration.as_mut().unwrap());
+                        transformed_body.push(stmt);
+                    } else {
+                        let Statement::ExportNamedDeclaration(export) =
+                            &scan_result.ast_table[module_idx].body[i]
+                        else {
+                            unreachable!()
+                        };
+                        let mut decl = export
+                            .declaration
+                            .as_ref()
+                            .unwrap()
+                            .clone_in_with_semantic_ids(allocator);
+                        ensure_declare_on_declaration(&mut decl);
+                        decl.span_mut().start = export.span.start;
+                        transformed_body.push(Statement::from(decl));
+                    }
                 }
                 StatementAction::UnwrapExportDefault => {
                     let Statement::ExportDefaultDeclaration(export_default) =

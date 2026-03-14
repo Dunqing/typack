@@ -1,11 +1,10 @@
-// index.d.ts
-//#region tests/fixtures/namespace-definition-rename/a.d.ts
+//#region tests/rolldown-plugin-dts/namespace-definition-rename/a.d.ts
 declare function fn(arg: string): string;
 declare namespace fn {
   var staticProp: string;
 }
 //#endregion
-//#region tests/fixtures/namespace-definition-rename/b.d.ts
+//#region tests/rolldown-plugin-dts/namespace-definition-rename/b.d.ts
 declare function fn$1(arg: string): string;
 declare namespace fn$1 {
   var staticProp: string;

@@ -1,5 +1,3 @@
-// index.d.ts
-//#region tests/fixtures/spread-tuple-type/index.d.ts
-declare type SpreadedTuple = [number, ...string[]];
+//#region tests/rolldown-plugin-dts/spread-tuple-type/index.d.ts
+export declare type SpreadedTuple = [number, ...string[]];
 //#endregion
-export { SpreadedTuple };
