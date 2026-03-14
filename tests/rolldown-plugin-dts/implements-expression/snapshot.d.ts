@@ -1,5 +1,4 @@
-// index.d.ts
-//#region tests/fixtures/implements-expression/ns.d.ts
+//#region tests/rolldown-plugin-dts/implements-expression/ns.d.ts
 declare namespace ns {
   interface Props<T> {
     foo: T;
@@ -9,11 +8,10 @@ declare namespace ns {
   }
 }
 //#endregion
-//#region tests/fixtures/implements-expression/index.d.ts
+//#region tests/rolldown-plugin-dts/implements-expression/index.d.ts
 interface G {}
-interface MyComponentProps extends ns.Props<G> {
+export interface MyComponentProps extends ns.Props<G> {
   bar: string;
 }
-declare class MyComponent extends ns.Component<MyComponentProps> {}
+export declare class MyComponent extends ns.Component<MyComponentProps> {}
 //#endregion
-export { MyComponent, MyComponentProps };

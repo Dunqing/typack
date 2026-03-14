@@ -1,10 +1,8 @@
-// index.d.ts
-//#region tests/fixtures/issue-284/index.d.ts
-interface MyInterface {
+//#region tests/rolldown-plugin-dts/issue-284/index.d.ts
+export interface MyInterface {
   a: string;
 }
-declare namespace MyInterface {
+export declare namespace MyInterface {
   export const b: string;
 }
 //#endregion
-export { MyInterface };

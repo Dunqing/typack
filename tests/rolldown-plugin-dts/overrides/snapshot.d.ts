@@ -1,5 +1,4 @@
-// index.d.ts
-//#region tests/fixtures/overrides/index.d.ts
+//#region tests/rolldown-plugin-dts/overrides/index.d.ts
 interface A {}
 interface B {}
 interface C {}

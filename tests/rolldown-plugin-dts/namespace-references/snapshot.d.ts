@@ -1,5 +1,4 @@
-// index.d.ts
-//#region tests/fixtures/namespace-references/ns.d.ts
+//#region tests/rolldown-plugin-dts/namespace-references/ns.d.ts
 interface Shadowed1 {}
 interface Shadowed2 {}
 interface Shadowed3 {}
@@ -8,7 +7,7 @@ interface Referenced1 {}
 interface Referenced2 {}
 declare namespace ns {
   class Shadowed1 {}
-  enum Shadowed2 {}
+    enum Shadowed2 {}
   type Shadowed3 = undefined;
   function Shadowed4(): void;
   interface A {

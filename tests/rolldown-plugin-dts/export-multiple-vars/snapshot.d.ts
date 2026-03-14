@@ -1,5 +1,4 @@
-// index.d.ts
-//#region tests/fixtures/export-multiple-vars/settings.d.ts
+//#region tests/rolldown-plugin-dts/export-multiple-vars/settings.d.ts
 declare type In = {
   a: string;
 };
@@ -7,7 +6,7 @@ declare type Out = {
   b: number;
 };
 //#endregion
-//#region tests/fixtures/export-multiple-vars/util.d.ts
+//#region tests/rolldown-plugin-dts/export-multiple-vars/util.d.ts
 declare const config: {
   normalize: (inVar: In) => Out;
 };

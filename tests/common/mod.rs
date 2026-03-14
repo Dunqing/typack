@@ -176,19 +176,69 @@ fn is_top_level_export(line: &str) -> bool {
         && (trimmed.starts_with("export {") || trimmed.starts_with("export type {"))
 }
 
-/// Extract exported public names from top-level export statements.
+/// Extract exported public names from top-level export statements and
+/// inline export declarations (e.g. `export interface Foo { ... }`).
 /// Returns a sorted set of exported names (the public API).
 fn extract_export_names(input: &str) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     for line in input.lines() {
-        if !is_top_level_export(line) {
-            continue;
-        }
-        for (_, exported) in parse_export_specifiers(line) {
-            names.insert(exported);
+        if is_top_level_export(line) {
+            for (_, exported) in parse_export_specifiers(line) {
+                names.insert(exported);
+            }
+        } else if let Some(name) = extract_inline_export_name(line) {
+            names.insert(name);
         }
     }
     names
+}
+
+/// Extract the declared name from an inline export declaration like
+/// `export interface Foo {`, `export declare const bar: ...`, etc.
+/// Returns `None` if the line is not an inline export declaration.
+fn extract_inline_export_name(line: &str) -> Option<String> {
+    // Must start at column 0 (top-level)
+    if !line.starts_with("export ") {
+        return None;
+    }
+    let rest = line.strip_prefix("export ")?.trim_start();
+    // Skip `export { ... }` and `export type { ... }` (handled elsewhere)
+    if rest.starts_with('{') || rest.starts_with("type {") {
+        return None;
+    }
+    // Skip re-exports: `export * from`, `export { ... } from`
+    if rest.starts_with('*') {
+        return None;
+    }
+
+    // Strip optional `declare` keyword
+    let rest = rest.strip_prefix("declare ").unwrap_or(rest).trim_start();
+
+    // Match declaration keywords followed by the name
+    let keywords = [
+        "interface ",
+        "type ",
+        "const ",
+        "function ",
+        "class ",
+        "enum ",
+        "abstract class ",
+        "namespace ",
+        "let ",
+        "var ",
+    ];
+    for kw in &keywords {
+        if let Some(after_kw) = rest.strip_prefix(kw) {
+            let name = after_kw
+                .trim_start()
+                .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+                .next()?;
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Extract top-level export local->exported mappings.

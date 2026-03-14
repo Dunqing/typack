@@ -1,8 +1,6 @@
-// index.d.ts
-//#region tests/fixtures/namespace-definition/index.d.ts
-declare function fn(arg: string): string;
-declare namespace fn {
+//#region tests/rolldown-plugin-dts/namespace-definition/index.d.ts
+export declare function fn(arg: string): string;
+export declare namespace fn {
   var staticProp: string;
 }
 //#endregion
-export { fn };

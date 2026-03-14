@@ -393,23 +393,23 @@ interface MockInstanceOption {
 }
 //#endregion
 //#region tests/real-world/vitest/spy.d.ts
-declare function isMockFunction(fn: any): fn is Mock;
-declare function createMockInstance(options?: MockInstanceOption): Mock<Procedure | Constructable>;
-declare function fn<T extends Procedure | Constructable = Procedure>(originalImplementation?: T): Mock<T>;
-declare function spyOn<
+export declare function isMockFunction(fn: any): fn is Mock;
+export declare function createMockInstance(options?: MockInstanceOption): Mock<Procedure | Constructable>;
+export declare function fn<T extends Procedure | Constructable = Procedure>(originalImplementation?: T): Mock<T>;
+export declare function spyOn<
   T extends object,
   S extends Properties<Required<T>>
 >(object: T, key: S, accessor: "get"): Mock<() => T[S]>;
-declare function spyOn<
+export declare function spyOn<
   T extends object,
   G extends Properties<Required<T>>
 >(object: T, key: G, accessor: "set"): Mock<(arg: T[G]) => void>;
-declare function spyOn<
+export declare function spyOn<
   T extends object,
   M extends Classes<Required<T>> | Methods<Required<T>>
 >(object: T, key: M): Required<T>[M] extends Constructable | Procedure ? Mock<Required<T>[M]> : never;
-declare function restoreAllMocks(): void;
-declare function clearAllMocks(): void;
-declare function resetAllMocks(): void;
+export declare function restoreAllMocks(): void;
+export declare function clearAllMocks(): void;
+export declare function resetAllMocks(): void;
 //#endregion
-export { type Constructable, type MaybeMocked, type MaybeMockedConstructor, type MaybeMockedDeep, type MaybePartiallyMocked, type MaybePartiallyMockedDeep, type Mock, type MockContext, type MockInstance, type MockInstanceOption, type MockParameters, type MockProcedureContext, type MockResult, type MockResultIncomplete, type MockResultReturn, type MockResultThrow, type MockReturnType, type MockSettledResult, type MockSettledResultFulfilled, type MockSettledResultIncomplete, type MockSettledResultRejected, type Mocked, type MockedClass, type MockedFunction, type MockedFunctionDeep, type MockedObject, type MockedObjectDeep, type PartialMock, type PartiallyMockedFunction, type PartiallyMockedFunctionDeep, type Procedure, clearAllMocks, createMockInstance, fn, isMockFunction, resetAllMocks, restoreAllMocks, spyOn };
+export { type Constructable, type MaybeMocked, type MaybeMockedConstructor, type MaybeMockedDeep, type MaybePartiallyMocked, type MaybePartiallyMockedDeep, type Mock, type MockContext, type MockInstance, type MockInstanceOption, type MockParameters, type MockProcedureContext, type MockResult, type MockResultIncomplete, type MockResultReturn, type MockResultThrow, type MockReturnType, type MockSettledResult, type MockSettledResultFulfilled, type MockSettledResultIncomplete, type MockSettledResultRejected, type Mocked, type MockedClass, type MockedFunction, type MockedFunctionDeep, type MockedObject, type MockedObjectDeep, type PartialMock, type PartiallyMockedFunction, type PartiallyMockedFunctionDeep, type Procedure };

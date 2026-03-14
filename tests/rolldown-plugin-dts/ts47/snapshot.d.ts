@@ -1,10 +1,8 @@
-// index.d.ts
-//#region tests/fixtures/ts47/index.d.ts
+//#region tests/rolldown-plugin-dts/ts47/index.d.ts
 interface Hammer {}
-type FirstHammer<T> = T extends [infer H extends Hammer, ...unknown[]] ? H : never;
-interface State<in out T> {
+export type FirstHammer<T> = T extends [infer H extends Hammer, ...unknown[]] ? H : never;
+export interface State<in out T> {
   get: () => T;
   set: (value: T) => void;
 }
 //#endregion
-export { FirstHammer, State };

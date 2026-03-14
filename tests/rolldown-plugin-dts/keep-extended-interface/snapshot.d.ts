@@ -1,6 +1,4 @@
-// index.d.ts
-//#region tests/fixtures/keep-extended-interface/index.d.ts
+//#region tests/rolldown-plugin-dts/keep-extended-interface/index.d.ts
 interface Bar {}
-interface Foo extends Bar {}
+export interface Foo extends Bar {}
 //#endregion
-export { Foo };

@@ -1,5 +1,3 @@
-// index.d.ts
-//#region tests/fixtures/ts43-templatestring/index.d.ts
-declare function foo<V extends string>(arg: `*${V}*`): V;
+//#region tests/rolldown-plugin-dts/ts43-templatestring/index.d.ts
+export declare function foo<V extends string>(arg: `*${V}*`): V;
 //#endregion
-export { foo };

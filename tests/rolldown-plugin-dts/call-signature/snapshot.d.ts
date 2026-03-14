@@ -1,12 +1,10 @@
-// index.d.ts
-//#region tests/fixtures/call-signature/index.d.ts
-interface I {
+//#region tests/rolldown-plugin-dts/call-signature/index.d.ts
+export interface I {
   (arg: string): string;
   staticProp: string;
 }
-declare const fn: {
+export declare const fn: {
   (arg: string): string;
   staticProp: string;
 };
 //#endregion
-export { I, fn };

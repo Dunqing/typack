@@ -1,5 +1,4 @@
-// index.d.ts
-//#region tests/fixtures/renaming/a.d.ts
+//#region tests/rolldown-plugin-dts/renaming/a.d.ts
 interface A$1 {}
 interface B$1 {}
 interface C$1 {}
@@ -18,7 +17,7 @@ declare type Type = {
   f: F$1;
 };
 //#endregion
-//#region tests/fixtures/renaming/b.d.ts
+//#region tests/rolldown-plugin-dts/renaming/b.d.ts
 interface A {}
 interface B {}
 interface C {}

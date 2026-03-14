@@ -1,11 +1,10 @@
-// index.d.ts
-//#region tests/fixtures/circular-to-entry/Foo.d.ts
+//#region tests/rolldown-plugin-dts/circular-to-entry/Foo.d.ts
 declare class Foo {
   manager: FooManager;
   constructor(manager: FooManager);
 }
 //#endregion
-//#region tests/fixtures/circular-to-entry/index.d.ts
+//#region tests/rolldown-plugin-dts/circular-to-entry/index.d.ts
 declare class FooManager {
   foos: Array<Foo>;
   constructor();

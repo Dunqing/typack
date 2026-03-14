@@ -1,12 +1,10 @@
-// index.d.ts
-//#region tests/fixtures/inline-import-generic/bar.d.ts
+//#region tests/rolldown-plugin-dts/inline-import-generic/bar.d.ts
 interface Bar<T> {
   t: T;
 }
 //#endregion
-//#region tests/fixtures/inline-import-generic/index.d.ts
-interface Foo {
+//#region tests/rolldown-plugin-dts/inline-import-generic/index.d.ts
+export interface Foo {
   bar: Bar<number>;
 }
 //#endregion
-export { Foo };

@@ -7,6 +7,6 @@ interface Missing {
 }
 //#endregion
 //#region tests/fixtures/inline-import-with-reexport/index.d.ts
-type Found = Missing;
+export type Found = Missing;
 //#endregion
-export { type Keep, type Found };
+export { type Keep };

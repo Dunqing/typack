@@ -1,7 +1,5 @@
-// index.d.ts
-//#region tests/fixtures/construct-signature/index.d.ts
-interface Foo {
+//#region tests/rolldown-plugin-dts/construct-signature/index.d.ts
+export interface Foo {
   new (): any;
 }
 //#endregion
-export { Foo };

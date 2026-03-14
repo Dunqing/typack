@@ -1,16 +1,14 @@
-// index.d.ts
-//#region tests/fixtures/enum/index.d.ts
-declare enum A {
+//#region tests/rolldown-plugin-dts/enum/index.d.ts
+export declare enum A {
   A = 0
 }
-declare enum B {
+export declare enum B {
   B = "B"
 }
-declare const enum C {
+export declare const enum C {
   C = 0
 }
-declare const enum D {
+export declare const enum D {
   D = "D"
 }
 //#endregion
-export { A, B, C, D };

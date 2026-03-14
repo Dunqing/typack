@@ -1,4 +1,3 @@
-// index.d.ts
 declare namespace defs_d_exports {
   export { A, B, C, D, E, F };
 }
@@ -17,10 +16,9 @@ declare namespace deep_d_exports {
 declare namespace only_one_d_exports {
   export { A };
 }
-//#endregion
-//#region tests/fixtures/re-export-namespace-multiple/index.d.ts
-interface WithA {
+//#region tests/rolldown-plugin-dts/re-export-namespace-multiple/index.d.ts
+export interface WithA {
   a: A;
 }
 //#endregion
-export { WithA, deep_d_exports as deep, defs_d_exports as ns, only_one_d_exports as onlyOne };
+export { deep_d_exports as deep, defs_d_exports as ns, only_one_d_exports as onlyOne };

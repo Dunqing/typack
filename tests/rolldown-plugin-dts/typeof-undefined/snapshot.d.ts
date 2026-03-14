@@ -1,5 +1,3 @@
-// index.d.ts
-//#region tests/fixtures/typeof-undefined/index.d.ts
-type T = typeof undefined | typeof NaN;
+//#region tests/rolldown-plugin-dts/typeof-undefined/index.d.ts
+export type T = typeof undefined | typeof NaN;
 //#endregion
-export { T };

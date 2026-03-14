@@ -1,4 +1,3 @@
-// index.d.ts
 import A from "a";
 import D from "d";
 import { B } from "b";
@@ -19,18 +18,18 @@ import * as O from "o";
 export * from "i1";
 export * from "n";
 
-//#region tests/fixtures/type-only-import-export/foo.d.ts
+//#region tests/rolldown-plugin-dts/type-only-import-export/foo.d.ts
 interface Foo {}
 //#endregion
-//#region tests/fixtures/type-only-import-export/bar.d.ts
+//#region tests/rolldown-plugin-dts/type-only-import-export/bar.d.ts
 declare class BarType {}
 declare class BarValue {}
 //#endregion
-//#region tests/fixtures/type-only-import-export/index.d.ts
-interface O$1 {}
+//#region tests/rolldown-plugin-dts/type-only-import-export/index.d.ts
+interface O {}
 declare class X {}
 interface Foo$1 {
   inline: string;
 }
 //#endregion
-export { A, type B, type B1 as B2, type B1 as B3, BarType, BarValue, C, C as C1, type D, type E3 as E2, E3, E4, F, type Foo, type Foo$1 as FooInlne, G, G1, H1, I, type J, type K1, type L, type M1, type O, O$1 as O1, type X, E as default };
+export { A, type B, type B1 as B2, type B1 as B3, BarType, BarValue, C, C as C1, type D, type E3 as E2, E3, E4, F, type Foo, type Foo$1 as FooInlne, G, G1, H1, I, type J, type K1, type L, type M1, type O, O as O1, type X, E as default };

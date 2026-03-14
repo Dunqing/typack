@@ -1,11 +1,10 @@
-// index.d.ts
-//#region tests/fixtures/issue-254/foo.d.ts
+//#region tests/rolldown-plugin-dts/issue-254/foo.d.ts
 declare enum E {}
 interface Foo {
   e: E;
 }
 declare namespace Bar {
-  export enum F {}
+  export   enum F {}
 }
 //#endregion
 export { Bar, Foo };
